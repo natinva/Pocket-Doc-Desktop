@@ -6,6 +6,7 @@ const homeBtn = document.querySelector("#homeBtn");
 const state = {
   screen: "home",
   session: null,
+  sessions: [],
   health: null,
   models: [],
   selectedModelId: "",
@@ -40,13 +41,27 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+async function loadSessions() {
+  state.sessions = await api("/api/sessions");
+  return state.sessions;
+}
+
 async function createSession() {
   state.session = await api("/api/sessions", {
     method: "POST",
     body: JSON.stringify({ patient: { displayName: "Yeni hasta" } }),
   });
   state.reportPreview = "";
-  updateStatus();
+  await loadSessions();
+  updateStatus("yeni oturum");
+  render();
+}
+
+async function openSession(sessionId, targetScreen = "voice") {
+  state.session = await api(`/api/sessions/${sessionId}`);
+  state.reportPreview = "";
+  state.screen = targetScreen;
+  updateStatus("oturum açıldı");
   render();
 }
 
@@ -76,6 +91,11 @@ function render() {
 function renderHome() {
   const models = state.health?.modelRegistry;
   const tools = state.health?.clinicalTools;
+  const recentSessions = state.sessions.slice(0, 6);
+  const recentHtml = recentSessions.length
+    ? recentSessions.map((session) => renderSessionCard(session)).join("")
+    : `<div class="empty-state">Henüz kayıtlı oturum yok.</div>`;
+
   content.innerHTML = `
     <section class="home-hero">
       <div class="panel">
@@ -105,10 +125,61 @@ function renderHome() {
           <strong>${models ? `${models.availableModels}/${models.totalModels} model hazır` : "Model registry"}</strong>
         </button>
       </div>
+      <div class="panel recent-panel">
+        <div class="module-header compact-header">
+          <div>
+            <h1>Son Oturumlar</h1>
+            <p class="muted">SQLite kayıtlarından son görüşmeleri geri açabilirsiniz.</p>
+          </div>
+          <button class="secondary-btn" id="refreshSessionsBtn">Yenile</button>
+        </div>
+        <div class="session-list">${recentHtml}</div>
+      </div>
     </section>
   `;
   document.querySelectorAll("[data-go]").forEach((button) => {
     button.onclick = () => setScreen(button.dataset.go);
+  });
+  document.querySelector("#refreshSessionsBtn").onclick = async () => {
+    await loadSessions();
+    updateStatus("oturum listesi yenilendi");
+    renderHome();
+  };
+  document.querySelectorAll("[data-session-id]").forEach((button) => {
+    button.onclick = () => openSession(button.dataset.sessionId, "voice");
+  });
+}
+
+function renderSessionCard(session) {
+  const patient = session.patient || {};
+  const name = patient.displayName || "Yeni hasta";
+  const complaint = patient.chiefComplaint || "Ana şikayet yok";
+  const updated = formatDateTime(session.updatedAt || session.createdAt);
+  const active = state.session?.id === session.id;
+  const status = session.finalized ? "Final" : session.summary ? "Özetli" : session.transcript ? "Transkript" : "Taslak";
+  return `
+    <button class="session-card ${active ? "selected" : ""}" data-session-id="${escapeHtml(session.id)}">
+      <div>
+        <strong>${escapeHtml(name)}</strong>
+        <span>${escapeHtml(complaint)}</span>
+      </div>
+      <div class="session-meta">
+        <small>${escapeHtml(updated)}</small>
+        <em>${escapeHtml(status)}</em>
+      </div>
+    </button>
+  `;
+}
+
+function formatDateTime(value) {
+  if (!value) return "Tarih yok";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleString("tr-TR", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
   });
 }
 
@@ -224,6 +295,7 @@ async function savePatientInfo() {
     method: "PATCH",
     body: JSON.stringify({ patient }),
   });
+  await loadSessions();
   updateStatus("hasta bilgisi kaydedildi");
   renderVoice();
 }
@@ -239,6 +311,7 @@ async function saveClinicalNotes() {
     method: "PATCH",
     body: JSON.stringify({ doctorNotes, warnings }),
   });
+  await loadSessions();
   updateStatus("hekim notu kaydedildi");
   renderVoice();
 }
@@ -249,6 +322,7 @@ async function toggleFinalize() {
     method: "PATCH",
     body: JSON.stringify({ finalized: !state.session.finalized }),
   });
+  await loadSessions();
   updateStatus(state.session.finalized ? "final onaylandı" : "taslağa döndü");
   await loadReportPreview(false);
 }
@@ -329,6 +403,7 @@ async function transcribeBlob(blob) {
     return;
   }
   state.session = payload.session;
+  await loadSessions();
   const warning = payload.result.warning ? ` - ${payload.result.warning}` : "";
   updateStatus(`transkript${warning}`);
   renderVoice();
@@ -346,6 +421,7 @@ async function saveTranscript() {
     method: "POST",
     body: JSON.stringify({ transcript }),
   });
+  await loadSessions();
 }
 
 async function summarizeTranscript() {
@@ -357,6 +433,7 @@ async function summarizeTranscript() {
     body: JSON.stringify({ language: "tr" }),
   });
   state.session = payload.session;
+  await loadSessions();
   const warning = payload.result.warning ? ` - ${payload.result.warning}` : "";
   updateStatus(`özet hazır${warning}`);
   renderVoice();
@@ -445,6 +522,7 @@ async function analyzeImage() {
   const payload = await response.json();
   if (!response.ok) throw new Error(JSON.stringify(payload));
   state.session = payload.session;
+  await loadSessions();
   updateStatus("görüntü alındı");
   render();
 }
@@ -452,11 +530,18 @@ async function analyzeImage() {
 async function init() {
   homeBtn.onclick = backHome;
   newSessionBtn.onclick = createSession;
-  const [health, models] = await Promise.all([api("/api/health"), api("/api/models")]);
+  const [health, models, sessions] = await Promise.all([api("/api/health"), api("/api/models"), api("/api/sessions")]);
   state.health = health;
   state.models = models;
+  state.sessions = sessions;
   state.selectedModelId = models[0]?.id || "";
-  await createSession();
+  if (sessions.length) {
+    state.session = sessions[0];
+    updateStatus("son oturum açıldı");
+    renderHome();
+  } else {
+    await createSession();
+  }
 }
 
 init().catch((error) => {
