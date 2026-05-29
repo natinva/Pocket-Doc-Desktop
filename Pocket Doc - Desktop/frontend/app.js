@@ -9,6 +9,8 @@ const state = {
   sessions: [],
   sessionFilters: { query: "", status: "", includeArchived: false },
   security: { pinEnabled: false, lockTimeoutSeconds: 900, localOnlyMode: true, dataStorage: "local-sqlite", noticeTR: "" },
+  securityOverview: null,
+  auditEvents: [],
   accessKey: "",
   locked: false,
   lastActivityAt: Date.now(),
@@ -46,31 +48,10 @@ function escapeHtml(value) {
 }
 
 function markActivity() { state.lastActivityAt = Date.now(); }
-
-function setupActivityTracking() {
-  ["click", "keydown", "touchstart"].forEach((eventName) => window.addEventListener(eventName, markActivity, { passive: true }));
-  state.lockTimer = window.setInterval(checkAutoLock, 30000);
-}
-
-function checkAutoLock() {
-  if (!state.security.pinEnabled || state.locked) return;
-  const timeoutMs = Math.max(60, state.security.lockTimeoutSeconds || 900) * 1000;
-  if (Date.now() - state.lastActivityAt > timeoutMs) lockDevice("Otomatik kilit etkinleşti.");
-}
-
-function revokeAccessSilently() {
-  if (!state.accessKey) return;
-  fetch("/api/security/revoke-token", { method: "POST", headers: secureHeaders({ "Content-Type": "application/json" }) }).catch(() => {});
-}
-
-function lockDevice(message = "Cihaz kilitlendi.", revoke = true) {
-  if (!state.security.pinEnabled) return;
-  if (revoke) revokeAccessSilently();
-  state.accessKey = "";
-  state.locked = true;
-  statusText.textContent = message;
-  renderLockScreen();
-}
+function setupActivityTracking() { ["click", "keydown", "touchstart"].forEach((eventName) => window.addEventListener(eventName, markActivity, { passive: true })); state.lockTimer = window.setInterval(checkAutoLock, 30000); }
+function checkAutoLock() { if (!state.security.pinEnabled || state.locked) return; const timeoutMs = Math.max(60, state.security.lockTimeoutSeconds || 900) * 1000; if (Date.now() - state.lastActivityAt > timeoutMs) lockDevice("Otomatik kilit etkinleşti."); }
+function revokeAccessSilently() { if (!state.accessKey) return; fetch("/api/security/revoke-token", { method: "POST", headers: secureHeaders({ "Content-Type": "application/json" }) }).catch(() => {}); }
+function lockDevice(message = "Cihaz kilitlendi.", revoke = true) { if (!state.security.pinEnabled) return; if (revoke) revokeAccessSilently(); state.accessKey = ""; state.locked = true; statusText.textContent = message; renderLockScreen(); }
 
 function renderLockScreen(error = "") {
   const notice = state.security.noticeTR || "Hasta verisi lokal cihazda saklanır.";
@@ -100,12 +81,14 @@ function renderSecurityStrip() {
   const local = state.security.localOnlyMode ? "Lokal veri modu" : "Bulut bağlantısı aktif olabilir";
   const pin = state.security.pinEnabled ? "PIN aktif" : "PIN kapalı";
   const access = state.security.pinEnabled ? (state.accessKey ? "Erişim açık" : "Kilitli") : "Token gerekmez";
-  return `<div class="security-strip"><span>${escapeHtml(local)}</span><span>${escapeHtml(pin)}</span><span>${escapeHtml(access)}</span><button class="mini-btn" id="manualLockBtn" ${state.security.pinEnabled ? "" : "disabled"}>Kilitle</button></div>`;
+  return `<div class="security-strip"><span>${escapeHtml(local)}</span><span>${escapeHtml(pin)}</span><span>${escapeHtml(access)}</span><button class="mini-btn" id="securityPanelBtn">Güvenlik</button><button class="mini-btn" id="manualLockBtn" ${state.security.pinEnabled ? "" : "disabled"}>Kilitle</button></div>`;
 }
 
 function bindSecurityStrip() {
-  const button = document.querySelector("#manualLockBtn");
-  if (button) button.onclick = () => lockDevice("Manuel kilit.");
+  const lockButton = document.querySelector("#manualLockBtn");
+  const securityButton = document.querySelector("#securityPanelBtn");
+  if (lockButton) lockButton.onclick = () => lockDevice("Manuel kilit.");
+  if (securityButton) securityButton.onclick = openSecurityPanel;
 }
 
 async function loadSessions() {
@@ -118,42 +101,13 @@ async function loadSessions() {
   return state.sessions;
 }
 
-async function loadInitialSessions() {
-  const sessions = await loadSessions();
-  if (sessions.length) { state.session = sessions[0]; updateStatus("son oturum açıldı"); renderHome(); }
-  else await createSession();
-}
-
-async function createSession() {
-  state.session = await api("/api/sessions", { method: "POST", body: JSON.stringify({ patient: { displayName: "Yeni hasta" } }) });
-  state.reportPreview = "";
-  state.sessionFilters.status = "";
-  state.sessionFilters.includeArchived = false;
-  await loadSessions(); updateStatus("yeni oturum"); render();
-}
-
-async function openSession(sessionId, targetScreen = "voice") {
-  state.session = await api(`/api/sessions/${sessionId}`);
-  state.reportPreview = ""; state.screen = targetScreen; updateStatus("oturum açıldı"); render();
-}
-
-function updateStatus(extra = "") {
-  const sessionId = state.session ? state.session.id.slice(0, 8) : "yok";
-  const finalized = state.session?.finalized ? " - final" : "";
-  const archived = state.session?.archived ? " - arşiv" : "";
-  statusText.textContent = `Oturum ${sessionId}${finalized}${archived}${extra ? " - " + extra : ""}`;
-}
-
+async function loadInitialSessions() { const sessions = await loadSessions(); if (sessions.length) { state.session = sessions[0]; updateStatus("son oturum açıldı"); renderHome(); } else await createSession(); }
+async function createSession() { state.session = await api("/api/sessions", { method: "POST", body: JSON.stringify({ patient: { displayName: "Yeni hasta" } }) }); state.reportPreview = ""; state.sessionFilters.status = ""; state.sessionFilters.includeArchived = false; await loadSessions(); updateStatus("yeni oturum"); render(); }
+async function openSession(sessionId, targetScreen = "voice") { state.session = await api(`/api/sessions/${sessionId}`); state.reportPreview = ""; state.screen = targetScreen; updateStatus("oturum açıldı"); render(); }
+function updateStatus(extra = "") { const sessionId = state.session ? state.session.id.slice(0, 8) : "yok"; const finalized = state.session?.finalized ? " - final" : ""; const archived = state.session?.archived ? " - arşiv" : ""; statusText.textContent = `Oturum ${sessionId}${finalized}${archived}${extra ? " - " + extra : ""}`; }
 function setScreen(screen) { state.screen = screen; render(); }
 function backHome() { setScreen("home"); }
-function render() {
-  if (state.locked) { renderLockScreen(); return; }
-  if (!state.session) return;
-  if (state.screen === "home") renderHome();
-  if (state.screen === "voice") renderVoice();
-  if (state.screen === "tools") renderTools();
-  if (state.screen === "imaging") renderImaging();
-}
+function render() { if (state.locked) { renderLockScreen(); return; } if (!state.session) return; if (state.screen === "home") renderHome(); if (state.screen === "voice") renderVoice(); if (state.screen === "tools") renderTools(); if (state.screen === "imaging") renderImaging(); if (state.screen === "security") renderSecurityPanel(); }
 
 function renderHome() {
   const models = state.health?.modelRegistry;
@@ -172,13 +126,29 @@ function renderHome() {
   document.querySelectorAll("[data-session-delete]").forEach((button) => (button.onclick = () => deleteSession(button.dataset.sessionDelete)));
 }
 
+async function openSecurityPanel() { state.screen = "security"; await loadSecurityPanelData(); renderSecurityPanel(); }
+async function loadSecurityPanelData() { const [overview, audit] = await Promise.all([api("/api/security/overview"), api("/api/security/audit?limit=80")]); state.securityOverview = overview; state.auditEvents = audit.events || []; }
+function renderSecurityPanel() {
+  const overview = state.securityOverview || {};
+  const sec = overview.security || state.security;
+  const sessions = overview.sessions || {};
+  const audit = overview.audit || {};
+  const actionCounts = audit.actionCounts || {};
+  const auditRows = state.auditEvents.map((event) => `<div class="audit-row"><strong>${escapeHtml(event.action || "unknown")}</strong><span>${escapeHtml(formatAuditTime(event.ts))}</span><code>${escapeHtml(JSON.stringify(event.details || {}))}</code></div>`).join("") || `<div class="empty-state">Henüz audit kaydı yok.</div>`;
+  const actionRows = Object.entries(actionCounts).map(([key, value]) => `<div class="metric-row"><span>${escapeHtml(key)}</span><strong>${escapeHtml(value)}</strong></div>`).join("") || `<div class="empty-state">Aksiyon özeti yok.</div>`;
+  content.innerHTML = `<section class="screen security-screen"><div class="panel">${moduleHeader("Güvenlik", "Cihaz erişimi, lokal veri modu ve audit kayıtları.")}${renderSecurityStrip()}<div class="security-grid"><div class="metric-row"><span>PIN</span><strong>${sec.pinEnabled ? "Aktif" : "Kapalı"}</strong></div><div class="metric-row"><span>Otomatik kilit</span><strong>${Math.round((sec.lockTimeoutSeconds || 0) / 60)} dk</strong></div><div class="metric-row"><span>Token süresi</span><strong>${Math.round((sec.accessTokenTtlSeconds || 0) / 60)} dk</strong></div><div class="metric-row"><span>Veri modu</span><strong>${sec.localOnlyMode ? "Lokal" : "Bulut mümkün"}</strong></div><div class="metric-row"><span>Audit log</span><strong>${sec.auditLogEnabled ? "Aktif" : "Kapalı"}</strong></div><div class="metric-row"><span>Depolama</span><strong>${escapeHtml(sec.dataStorage || "-")}</strong></div></div><div class="security-notice">${escapeHtml(sec.noticeTR || "")}</div><div class="actions"><button class="secondary-btn" id="refreshSecurityBtn">Güncelle</button><button class="danger-btn" id="lockFromSecurityBtn" ${state.security.pinEnabled ? "" : "disabled"}>Kilitle</button></div></div><div class="panel"><h2>Oturum Özeti</h2><div class="security-grid"><div class="metric-row"><span>Toplam</span><strong>${sessions.total || 0}</strong></div><div class="metric-row"><span>Aktif</span><strong>${sessions.active || 0}</strong></div><div class="metric-row"><span>Arşiv</span><strong>${sessions.archived || 0}</strong></div><div class="metric-row"><span>Final</span><strong>${sessions.finalized || 0}</strong></div><div class="metric-row"><span>Taslak</span><strong>${sessions.draft || 0}</strong></div></div><h2>Audit Aksiyon Özeti</h2><div class="audit-summary">${actionRows}</div></div><div class="panel audit-panel"><h2>Son Audit Kayıtları</h2><p class="muted">Kişisel veri içeren alanlar redakte edilir; oturum ID yalnızca kısa biçimde tutulur.</p><div class="audit-list">${auditRows}</div></div></section>`;
+  bindBackButton(); bindSecurityStrip();
+  document.querySelector("#refreshSecurityBtn").onclick = openSecurityPanel;
+  document.querySelector("#lockFromSecurityBtn").onclick = () => lockDevice("Manuel kilit.");
+}
+function formatAuditTime(value) { if (!value) return "-"; const parsed = new Date(value); if (Number.isNaN(parsed.getTime())) return value; return parsed.toLocaleString("tr-TR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }); }
+
 async function applySessionFilters() { state.sessionFilters.query = document.querySelector("#sessionSearchInput").value.trim(); state.sessionFilters.status = document.querySelector("#sessionStatusFilter").value; state.sessionFilters.includeArchived = document.querySelector("#includeArchivedInput").checked; await refreshSessions("filtre uygulandı"); }
 async function clearSessionFilters() { state.sessionFilters = { query: "", status: "", includeArchived: false }; await refreshSessions("filtre temizlendi"); }
 async function refreshSessions(message = "oturum listesi yenilendi") { await loadSessions(); updateStatus(message); renderHome(); }
 async function archiveSession(sessionId) { await api(`/api/sessions/${sessionId}/archive`, { method: "POST" }); if (state.session?.id === sessionId) state.session.archived = true; await refreshSessions("oturum arşivlendi"); }
 async function restoreSession(sessionId) { const session = await api(`/api/sessions/${sessionId}/restore`, { method: "POST" }); if (state.session?.id === sessionId) state.session = session; await refreshSessions("oturum geri alındı"); }
 async function deleteSession(sessionId) { const ok = window.confirm("Bu oturumu kalıcı olarak silmek istediğinize emin misiniz?"); if (!ok) return; await api(`/api/sessions/${sessionId}`, { method: "DELETE" }); await loadSessions(); if (state.session?.id === sessionId) { state.session = state.sessions[0] || null; state.reportPreview = ""; } if (!state.session) await createSession(); else { updateStatus("oturum silindi"); renderHome(); } }
-
 function renderSessionCard(session) { const patient = session.patient || {}; const name = patient.displayName || "Yeni hasta"; const complaint = patient.chiefComplaint || "Ana şikayet yok"; const updated = formatDateTime(session.updatedAt || session.createdAt); const active = state.session?.id === session.id; const status = session.archived ? "Arşiv" : session.finalized ? "Final" : session.summary ? "Özetli" : session.transcript ? "Transkript" : "Taslak"; return `<article class="session-card ${active ? "selected" : ""} ${session.archived ? "archived" : ""}"><button class="session-open" data-session-open="${escapeHtml(session.id)}"><strong>${escapeHtml(name)}</strong><span>${escapeHtml(complaint)}</span></button><div class="session-meta"><small>${escapeHtml(updated)}</small><em>${escapeHtml(status)}</em></div><div class="session-actions">${session.archived ? `<button class="mini-btn" data-session-restore="${escapeHtml(session.id)}">Geri al</button>` : `<button class="mini-btn" data-session-archive="${escapeHtml(session.id)}">Arşivle</button>`}<button class="mini-btn danger-mini" data-session-delete="${escapeHtml(session.id)}">Sil</button></div></article>`; }
 function formatDateTime(value) { if (!value) return "Tarih yok"; const parsed = new Date(value); if (Number.isNaN(parsed.getTime())) return value; return parsed.toLocaleString("tr-TR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }); }
 function moduleHeader(title, subtitle = "") { return `<div class="module-header"><div><h1>${escapeHtml(title)}</h1>${subtitle ? `<p class="muted">${escapeHtml(subtitle)}</p>` : ""}</div><button class="secondary-btn" id="backHomeBtn">Ana Sayfa</button></div>`; }
@@ -187,16 +157,7 @@ function bindBackButton() { const back = document.querySelector("#backHomeBtn");
 function renderVoice() {
   const patient = state.session?.patient || {};
   content.innerHTML = `<section class="screen patientsum-screen"><div class="panel patient-card">${moduleHeader("PatientSum", "Hasta bilgisi, ses kaydı, transkript, özet ve hekim onayı.")}${renderSecurityStrip()}<div class="field-grid patient-grid"><div class="field"><label for="patientName">Hasta adı / kısa tanım</label><input id="patientName" value="${escapeHtml(patient.displayName || "")}" placeholder="Yeni hasta" /></div><div class="field"><label for="patientAge">Yaş</label><input id="patientAge" value="${escapeHtml(patient.age || "")}" inputmode="numeric" placeholder="Örn. 42" /></div><div class="field"><label for="patientSex">Cinsiyet</label><select id="patientSex"><option value="" ${!patient.sex ? "selected" : ""}>Belirtilmedi</option><option value="Kadın" ${patient.sex === "Kadın" ? "selected" : ""}>Kadın</option><option value="Erkek" ${patient.sex === "Erkek" ? "selected" : ""}>Erkek</option><option value="Diğer/Belirtmek istemiyor" ${patient.sex === "Diğer/Belirtmek istemiyor" ? "selected" : ""}>Diğer/Belirtmek istemiyor</option></select></div><div class="field"><label for="chiefComplaint">Ana şikayet</label><input id="chiefComplaint" value="${escapeHtml(patient.chiefComplaint || "")}" placeholder="Örn. diz ağrısı" /></div></div><div class="actions"><button class="secondary-btn" id="savePatientBtn">Hasta Bilgisini Kaydet</button><button class="primary-btn" id="startRecordBtn"><span class="recording-dot ${voice.recording ? "on" : ""}"></span>Kaydı Başlat</button><button class="danger-btn" id="stopRecordBtn" ${voice.recording ? "" : "disabled"}>Durdur ve Transkripte Dök</button><button class="secondary-btn" id="summaryBtn">Özet Oluştur</button></div><p class="muted" id="voiceStatus">${voice.recording ? "Kayıt devam ediyor." : "Kayıt, transkript veya manuel not ile özet oluşturabilirsiniz."}</p><div class="field"><label for="transcriptText">Transkript / Görüşme Notu</label><textarea id="transcriptText" placeholder="Ses kaydı yerine notu buraya yazabilir veya yapıştırabilirsiniz.">${escapeHtml(state.session?.transcript || "")}</textarea></div></div><div class="panel doctor-card"><div class="module-header compact-header"><div><h1>Özet ve Hekim Notu</h1><p class="muted">Final rapordan önce hekim kontrolü gerekir.</p></div><span class="final-badge ${state.session?.finalized ? "done" : ""}">${state.session?.finalized ? "Final" : "Taslak"}</span></div><h2>AI / Klinik Özet</h2><div class="result summary-result">${escapeHtml(state.session?.summary || "Henüz özet yok.")}</div><div class="field"><label for="doctorNotesText">Hekim Notu</label><textarea id="doctorNotesText" placeholder="Muayene, karar, plan veya düzenleme notu girin.">${escapeHtml(state.session?.doctorNotes || "")}</textarea></div><div class="field"><label for="warningsText">Uyarılar / Red flag notları</label><textarea id="warningsText" placeholder="Her satıra bir uyarı yazabilirsiniz.">${escapeHtml((state.session?.warnings || []).join("\n"))}</textarea></div><div class="actions"><button class="secondary-btn" id="saveClinicalBtn">Hekim Notunu Kaydet</button><button class="primary-btn" id="reportPreviewBtn">Rapor Önizle</button><button class="secondary-btn" id="openHtmlReportBtn">HTML Raporu Aç</button><button class="secondary-btn" id="downloadTxtReportBtn">TXT İndir</button><button class="danger-btn" id="finalizeBtn">${state.session?.finalized ? "Finali Geri Al" : "Final Onayla"}</button></div><div class="result report-result">${escapeHtml(state.reportPreview || "Rapor önizleme henüz oluşturulmadı.")}</div></div></section>`;
-  bindBackButton(); bindSecurityStrip();
-  document.querySelector("#savePatientBtn").onclick = savePatientInfo;
-  document.querySelector("#startRecordBtn").onclick = startRecording;
-  document.querySelector("#stopRecordBtn").onclick = stopAndTranscribe;
-  document.querySelector("#summaryBtn").onclick = summarizeTranscript;
-  document.querySelector("#saveClinicalBtn").onclick = saveClinicalNotes;
-  document.querySelector("#reportPreviewBtn").onclick = loadReportPreview;
-  document.querySelector("#openHtmlReportBtn").onclick = openHtmlReport;
-  document.querySelector("#downloadTxtReportBtn").onclick = downloadTxtReport;
-  document.querySelector("#finalizeBtn").onclick = toggleFinalize;
+  bindBackButton(); bindSecurityStrip(); document.querySelector("#savePatientBtn").onclick = savePatientInfo; document.querySelector("#startRecordBtn").onclick = startRecording; document.querySelector("#stopRecordBtn").onclick = stopAndTranscribe; document.querySelector("#summaryBtn").onclick = summarizeTranscript; document.querySelector("#saveClinicalBtn").onclick = saveClinicalNotes; document.querySelector("#reportPreviewBtn").onclick = loadReportPreview; document.querySelector("#openHtmlReportBtn").onclick = openHtmlReport; document.querySelector("#downloadTxtReportBtn").onclick = downloadTxtReport; document.querySelector("#finalizeBtn").onclick = toggleFinalize;
 }
 
 async function savePatientInfo() { const patient = { displayName: document.querySelector("#patientName").value.trim() || "Yeni hasta", age: document.querySelector("#patientAge").value.trim(), sex: document.querySelector("#patientSex").value, chiefComplaint: document.querySelector("#chiefComplaint").value.trim() }; state.session = await api(`/api/sessions/${state.session.id}`, { method: "PATCH", body: JSON.stringify({ patient }) }); await loadSessions(); updateStatus("hasta bilgisi kaydedildi"); renderVoice(); }
@@ -206,27 +167,15 @@ async function loadReportPreview(announce = true) { await saveClinicalNotes(); c
 async function openHtmlReport() { await saveClinicalNotes(); const html = await fetchTextWithAccess(`/api/sessions/${state.session.id}/report.html`); const blob = new Blob([html], { type: "text/html;charset=utf-8" }); window.open(URL.createObjectURL(blob), "_blank", "noopener,noreferrer"); updateStatus("HTML rapor açıldı"); }
 async function downloadTxtReport() { await saveClinicalNotes(); const text = await fetchTextWithAccess(`/api/sessions/${state.session.id}/report.txt`); const blob = new Blob([text], { type: "text/plain;charset=utf-8" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `pocketdoc-report-${state.session.id.slice(0, 8)}.txt`; a.click(); URL.revokeObjectURL(url); updateStatus("TXT rapor indirildi"); }
 async function fetchTextWithAccess(path) { const response = await fetch(path, { headers: secureHeaders() }); if (!response.ok) throw new Error(await response.text()); return response.text(); }
-
 async function startRecording() { if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) { updateVoiceStatus("Bu tarayıcıda mikrofon kaydı desteklenmiyor."); return; } try { const stream = await navigator.mediaDevices.getUserMedia({ audio: true }); voice.chunks = []; voice.lastBlob = null; voice.recorder = new MediaRecorder(stream); voice.recorder.ondataavailable = (event) => { if (event.data?.size) voice.chunks.push(event.data); }; voice.recorder.start(); voice.recording = true; updateStatus("ses kaydı"); renderVoice(); } catch (error) { updateVoiceStatus(`Mikrofon açılamadı: ${error.message || error}`); } }
 async function stopAndTranscribe() { if (!voice.recorder || voice.recorder.state === "inactive") return; updateVoiceStatus("Kayıt durduruluyor..."); const stopped = new Promise((resolve) => { voice.recorder.onstop = resolve; }); voice.recorder.stop(); voice.recorder.stream.getTracks().forEach((track) => track.stop()); await stopped; voice.recording = false; voice.lastBlob = new Blob(voice.chunks, { type: "audio/webm" }); renderVoice(); await transcribeBlob(voice.lastBlob); }
 async function transcribeBlob(blob) { if (!blob || blob.size === 0) { updateVoiceStatus("Ses kaydı boş görünüyor."); return; } updateVoiceStatus("Whisper transkripsiyon çalışıyor..."); const form = new FormData(); form.append("file", blob, "consultation.webm"); const response = await fetch(`/api/sessions/${state.session.id}/audio/transcribe?language=tr`, { method: "POST", headers: secureHeaders(), body: form }); const payload = await response.json(); if (!response.ok) { updateVoiceStatus(payload.detail || "Transkripsiyon hatası."); return; } state.session = payload.session; await loadSessions(); const warning = payload.result.warning ? ` - ${payload.result.warning}` : ""; updateStatus(`transkript${warning}`); renderVoice(); }
 function updateVoiceStatus(message) { const el = document.querySelector("#voiceStatus"); if (el) el.textContent = message; updateStatus(message); }
 async function saveTranscript() { const transcript = document.querySelector("#transcriptText").value; state.session = await api(`/api/sessions/${state.session.id}/transcript`, { method: "POST", body: JSON.stringify({ transcript }) }); await loadSessions(); }
 async function summarizeTranscript() { await savePatientInfo(); await saveTranscript(); updateVoiceStatus("Özet oluşturuluyor..."); const payload = await api(`/api/sessions/${state.session.id}/summary`, { method: "POST", body: JSON.stringify({ language: "tr" }) }); state.session = payload.session; await loadSessions(); const warning = payload.result.warning ? ` - ${payload.result.warning}` : ""; updateStatus(`özet hazır${warning}`); renderVoice(); }
-
 function renderTools() { const tools = state.health?.clinicalTools; const toolText = tools ? `${tools.totalTools} araçlık tam set` : "ClinicalTools tam set"; content.innerHTML = `<section class="screen tools-screen"><div class="panel">${moduleHeader("Clinical Tools", `${toolText} ürün içine gömüldü.`)}${renderSecurityStrip()}</div><iframe class="embedded-tool" src="/static/clinical_tools_full.html" title="Clinical Tools"></iframe></section>`; bindBackButton(); bindSecurityStrip(); }
 function renderImaging() { const domainGroups = state.models.reduce((acc, model) => { acc[model.domain] ||= []; acc[model.domain].push(model); return acc; }, {}); const modelOptions = Object.entries(domainGroups).map(([domain, models]) => `<optgroup label="${escapeHtml(domain)}">${models.map((model) => `<option value="${escapeHtml(model.id)}">${model.exists ? "" : "[eksik] "}${escapeHtml(model.name)}</option>`).join("")}</optgroup>`).join(""); content.innerHTML = `<section class="screen"><div class="panel">${moduleHeader("Yapay Zeka Modelleri", "Pi Camera, USB kamera ve dosya yükleme için görüntü analiz modülü.")}${renderSecurityStrip()}<div class="field"><label for="modelSelect">Model</label><select id="modelSelect">${modelOptions}</select></div><div class="field"><label for="imageFile">Dosya yükle</label><input id="imageFile" type="file" accept="image/*" /></div><div class="actions"><button class="primary-btn" id="analyzeBtn">Analiz Et</button><button class="secondary-btn" id="cameraPlaceholderBtn">Kamera Aç</button></div><p class="muted">Şu an dosya yükleme mock analizle çalışıyor. Pi Camera/USB kamera ve gerçek inference sıradaki modül.</p></div><div class="panel"><h2>Son Analiz</h2><div class="result">${escapeHtml(lastImagingText())}</div></div></section>`; bindBackButton(); bindSecurityStrip(); const modelSelect = document.querySelector("#modelSelect"); if (state.selectedModelId) modelSelect.value = state.selectedModelId; else state.selectedModelId = modelSelect.value; modelSelect.onchange = () => (state.selectedModelId = modelSelect.value); document.querySelector("#analyzeBtn").onclick = analyzeImage; document.querySelector("#cameraPlaceholderBtn").onclick = () => updateStatus("kamera modülü sırada"); }
 function lastImagingText() { const result = state.session?.imagingResults?.at(-1); if (!result) return "Henüz görüntü analizi yok."; return `${result.modelName}\n${result.resultSummaryTR}\n${(result.warningsTR || []).join("\n")}`; }
 async function analyzeImage() { const file = document.querySelector("#imageFile").files[0]; if (!file) { updateStatus("dosya seçilmedi"); return; } const form = new FormData(); form.append("file", file); const response = await fetch(`/api/sessions/${state.session.id}/imaging/${state.selectedModelId}`, { method: "POST", headers: secureHeaders(), body: form }); const payload = await response.json(); if (!response.ok) throw new Error(JSON.stringify(payload)); state.session = payload.session; await loadSessions(); updateStatus("görüntü alındı"); render(); }
-
-async function init() {
-  homeBtn.onclick = backHome; newSessionBtn.onclick = createSession; setupActivityTracking();
-  const [health, models, security] = await Promise.all([api("/api/health"), api("/api/models"), api("/api/security/status")]);
-  state.health = health; state.models = models; state.security = security; state.selectedModelId = models[0]?.id || "";
-  if (state.security.pinEnabled) { lockDevice("PIN koruması aktif.", false); return; }
-  const payload = await api("/api/security/verify-pin", { method: "POST", body: JSON.stringify({ pin: "" }) });
-  state.accessKey = payload.token || "";
-  await loadInitialSessions();
-}
-
+async function init() { homeBtn.onclick = backHome; newSessionBtn.onclick = createSession; setupActivityTracking(); const [health, models, security] = await Promise.all([api("/api/health"), api("/api/models"), api("/api/security/status")]); state.health = health; state.models = models; state.security = security; state.selectedModelId = models[0]?.id || ""; if (state.security.pinEnabled) { lockDevice("PIN koruması aktif.", false); return; } const payload = await api("/api/security/verify-pin", { method: "POST", body: JSON.stringify({ pin: "" }) }); state.accessKey = payload.token || ""; await loadInitialSessions(); }
 init().catch((error) => { statusText.textContent = "Hata"; content.innerHTML = `<div class="panel"><h1>Başlatılamadı</h1><pre>${escapeHtml(String(error))}</pre></div>`; });
