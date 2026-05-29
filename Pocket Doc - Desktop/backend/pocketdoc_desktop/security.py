@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import secrets
+import sys
 from datetime import datetime, timedelta, timezone
 from hmac import compare_digest
 from typing import Any
@@ -94,4 +95,14 @@ class AccessTokenManager:
             self._tokens.pop(token, None)
 
 
+def main() -> None:
+    if len(sys.argv) != 2 or not sys.argv[1].strip():
+        raise SystemExit("Usage: python -m pocketdoc_desktop.security <PIN>")
+    print(hash_pin(sys.argv[1].strip()))
+
+
 access_tokens = AccessTokenManager()
+
+
+if __name__ == "__main__":
+    main()
