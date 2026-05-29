@@ -52,12 +52,30 @@ class SecureFileStore:
             try:
                 yield temp_path
             finally:
-                try:
-                    temp_path.unlink(missing_ok=True)
-                except OSError:
-                    pass
+                self.safe_unlink(temp_path, allow_outside_uploads=True)
         else:
             yield path
+
+    def safe_unlink(self, path: Path | str | None, allow_outside_uploads: bool = False) -> bool:
+        if not path:
+            return False
+        candidate = Path(path)
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            return False
+        allowed_roots = [settings.upload_dir.resolve()]
+        if allow_outside_uploads:
+            allowed_roots.append(settings.secure_temp_dir.resolve())
+        if not any(_is_relative_to(resolved, root) for root in allowed_roots):
+            return False
+        if not resolved.exists() or not resolved.is_file():
+            return False
+        try:
+            resolved.unlink()
+            return True
+        except OSError:
+            return False
 
     def _encrypt(self, content: bytes) -> bytes:
         return self._fernet().encrypt(content)
@@ -89,6 +107,14 @@ class SecureFileStore:
             dklen=32,
         )
         return base64.urlsafe_b64encode(digest)
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
 
 
 secure_files = SecureFileStore()
