@@ -40,6 +40,7 @@ class SessionStore:
                     doctor_notes TEXT NOT NULL DEFAULT '',
                     clinical_tool_results_json TEXT NOT NULL DEFAULT '[]',
                     imaging_results_json TEXT NOT NULL DEFAULT '[]',
+                    audio_results_json TEXT NOT NULL DEFAULT '[]',
                     warnings_json TEXT NOT NULL DEFAULT '[]',
                     finalized INTEGER NOT NULL DEFAULT 0,
                     archived INTEGER NOT NULL DEFAULT 0
@@ -47,6 +48,7 @@ class SessionStore:
                 """
             )
             self._ensure_column(connection, "archived", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(connection, "audio_results_json", "TEXT NOT NULL DEFAULT '[]'")
             connection.commit()
 
     @staticmethod
@@ -67,6 +69,7 @@ class SessionStore:
             "doctorNotes": "",
             "clinicalToolResults": [],
             "imagingResults": [],
+            "audioResults": [],
             "warnings": [],
             "finalized": False,
             "archived": False,
@@ -140,8 +143,8 @@ class SessionStore:
                 INSERT INTO patient_sessions (
                     id, created_at, updated_at, patient_json, transcript, summary,
                     doctor_notes, clinical_tool_results_json, imaging_results_json,
-                    warnings_json, finalized, archived
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    audio_results_json, warnings_json, finalized, archived
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     updated_at = excluded.updated_at,
                     patient_json = excluded.patient_json,
@@ -150,6 +153,7 @@ class SessionStore:
                     doctor_notes = excluded.doctor_notes,
                     clinical_tool_results_json = excluded.clinical_tool_results_json,
                     imaging_results_json = excluded.imaging_results_json,
+                    audio_results_json = excluded.audio_results_json,
                     warnings_json = excluded.warnings_json,
                     finalized = excluded.finalized,
                     archived = excluded.archived
@@ -164,6 +168,7 @@ class SessionStore:
                     session.get("doctorNotes", ""),
                     _dump_json(session.get("clinicalToolResults", [])),
                     _dump_json(session.get("imagingResults", [])),
+                    _dump_json(session.get("audioResults", [])),
                     _dump_json(session.get("warnings", [])),
                     1 if session.get("finalized") else 0,
                     1 if session.get("archived") else 0,
@@ -183,6 +188,7 @@ class SessionStore:
             "doctorNotes": row["doctor_notes"] or "",
             "clinicalToolResults": _load_json(row["clinical_tool_results_json"], []),
             "imagingResults": _load_json(row["imaging_results_json"], []),
+            "audioResults": _load_json(row["audio_results_json"], []),
             "warnings": _load_json(row["warnings_json"], []),
             "finalized": bool(row["finalized"]),
             "archived": bool(row["archived"]),
@@ -223,10 +229,8 @@ def _dump_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
-def _load_json(value: str | None, fallback: Any) -> Any:
-    if not value:
-        return deepcopy(fallback)
+def _load_json(value: str, fallback: Any) -> Any:
     try:
-        return json.loads(value)
+        return json.loads(value) if value else deepcopy(fallback)
     except json.JSONDecodeError:
         return deepcopy(fallback)
