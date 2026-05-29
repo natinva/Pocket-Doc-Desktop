@@ -33,6 +33,7 @@ class Settings:
     reports_dir: Path = _path_from_env("POCKETDOC_REPORTS_DIR", PROJECT_ROOT / "reports")
     database_path: Path = _path_from_env("POCKETDOC_DATABASE_PATH", PROJECT_ROOT / "data" / "pocketdoc.sqlite3")
     audit_log_path: Path = _path_from_env("POCKETDOC_AUDIT_LOG_PATH", PROJECT_ROOT / "data" / "audit.log")
+    secure_temp_dir: Path = _path_from_env("POCKETDOC_SECURE_TEMP_DIR", PROJECT_ROOT / "data" / "tmp")
     device_pin: str | None = os.getenv("POCKETDOC_DEVICE_PIN") or None
     device_pin_hash: str | None = os.getenv("POCKETDOC_DEVICE_PIN_HASH") or None
     pin_hash_iterations: int = int(os.getenv("POCKETDOC_PIN_HASH_ITERATIONS", "390000"))
@@ -40,6 +41,9 @@ class Settings:
     access_token_ttl_seconds: int = int(os.getenv("POCKETDOC_ACCESS_TOKEN_TTL_SECONDS", "3600"))
     local_only_mode: bool = os.getenv("POCKETDOC_LOCAL_ONLY_MODE", "true").lower() in {"1", "true", "yes", "on"}
     audit_log_enabled: bool = os.getenv("POCKETDOC_AUDIT_LOG_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+    file_protection_enabled: bool = os.getenv("POCKETDOC_FILE_PROTECTION_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+    file_protection_secret: str | None = os.getenv("POCKETDOC_FILE_PROTECTION_SECRET") or None
+    file_protection_iterations: int = int(os.getenv("POCKETDOC_FILE_PROTECTION_ITERATIONS", "390000"))
     openai_api_key: str | None = os.getenv("OPENAI_API_KEY") or None
     openai_transcribe_model: str = os.getenv("OPENAI_TRANSCRIBE_MODEL", "whisper-1")
     openai_summary_model: str = os.getenv("OPENAI_SUMMARY_MODEL", "gpt-4.1-mini")
@@ -51,6 +55,7 @@ def ensure_runtime_dirs(settings: Settings) -> None:
     settings.reports_dir.mkdir(parents=True, exist_ok=True)
     settings.database_path.parent.mkdir(parents=True, exist_ok=True)
     settings.audit_log_path.parent.mkdir(parents=True, exist_ok=True)
+    settings.secure_temp_dir.mkdir(parents=True, exist_ok=True)
 
 
 settings = Settings()
