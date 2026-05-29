@@ -28,6 +28,13 @@ class SessionCreateRequest(BaseModel):
     patient: dict[str, Any] = Field(default_factory=dict)
 
 
+class SessionUpdateRequest(BaseModel):
+    patient: dict[str, Any] | None = None
+    doctorNotes: str | None = None
+    warnings: list[str] | None = None
+    finalized: bool | None = None
+
+
 class TranscriptRequest(BaseModel):
     transcript: str
 
@@ -77,6 +84,23 @@ def get_session(session_id: str) -> dict[str, Any]:
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     return session
+
+
+@app.patch("/api/sessions/{session_id}")
+def update_session(session_id: str, body: SessionUpdateRequest) -> dict[str, Any]:
+    patch = body.model_dump(exclude_none=True)
+    session = store.update(session_id, patch)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return session
+
+
+@app.get("/api/sessions/{session_id}/report-preview")
+def report_preview(session_id: str) -> dict[str, Any]:
+    session = store.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"session": session, "report": build_report_preview(session)}
 
 
 @app.post("/api/sessions/{session_id}/transcript")
@@ -159,3 +183,33 @@ def kiosk_config() -> dict[str, Any]:
         "recommendedBrowser": "chromium --kiosk http://localhost:8765",
         "pi": {"model": "Raspberry Pi 5", "ramGb": 16, "accelerator": "AI HAT+ 26 TOPS"},
     }
+
+
+def build_report_preview(session: dict[str, Any]) -> str:
+    patient = session.get("patient") or {}
+    patient_line = " / ".join(
+        item
+        for item in [
+            patient.get("displayName") or "Hasta adı belirtilmedi",
+            patient.get("age") or "Yaş belirtilmedi",
+            patient.get("sex") or "Cinsiyet belirtilmedi",
+            patient.get("chiefComplaint") or "Ana şikayet belirtilmedi",
+        ]
+        if item
+    )
+    tool_count = len(session.get("clinicalToolResults") or [])
+    imaging_count = len(session.get("imagingResults") or [])
+    finalized = "Evet" if session.get("finalized") else "Hayır"
+    return (
+        "POCKET DOC - KLİNİK GÖRÜŞME TASLAĞI\n\n"
+        f"Hasta: {patient_line}\n"
+        f"Oturum: {session.get('id')}\n"
+        f"Final onay: {finalized}\n\n"
+        "AI / Klinik Özet:\n"
+        f"{session.get('summary') or 'Henüz özet oluşturulmadı.'}\n\n"
+        "Hekim Notu:\n"
+        f"{session.get('doctorNotes') or 'Henüz hekim notu girilmedi.'}\n\n"
+        f"Klinik araç sonucu: {tool_count}\n"
+        f"Görüntü analizi sonucu: {imaging_count}\n\n"
+        "Not: Bu çıktı hekim tarafından kontrol edilmeden hasta raporu olarak kullanılmamalıdır."
+    )
