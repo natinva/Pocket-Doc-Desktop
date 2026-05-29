@@ -41,11 +41,19 @@ class SessionStore:
                     clinical_tool_results_json TEXT NOT NULL DEFAULT '[]',
                     imaging_results_json TEXT NOT NULL DEFAULT '[]',
                     warnings_json TEXT NOT NULL DEFAULT '[]',
-                    finalized INTEGER NOT NULL DEFAULT 0
+                    finalized INTEGER NOT NULL DEFAULT 0,
+                    archived INTEGER NOT NULL DEFAULT 0
                 )
                 """
             )
+            self._ensure_column(connection, "archived", "INTEGER NOT NULL DEFAULT 0")
             connection.commit()
+
+    @staticmethod
+    def _ensure_column(connection: sqlite3.Connection, column_name: str, definition: str) -> None:
+        columns = {row["name"] for row in connection.execute("PRAGMA table_info(patient_sessions)").fetchall()}
+        if column_name not in columns:
+            connection.execute(f"ALTER TABLE patient_sessions ADD COLUMN {column_name} {definition}")
 
     def create(self, patient: dict[str, Any] | None = None) -> dict[str, Any]:
         now = utc_now_iso()
@@ -61,16 +69,32 @@ class SessionStore:
             "imagingResults": [],
             "warnings": [],
             "finalized": False,
+            "archived": False,
         }
         self._upsert(session)
         return deepcopy(session)
 
-    def list(self) -> list[dict[str, Any]]:
+    def list(
+        self,
+        query: str | None = None,
+        status: str | None = None,
+        include_archived: bool = False,
+    ) -> list[dict[str, Any]]:
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT * FROM patient_sessions ORDER BY updated_at DESC, created_at DESC"
             ).fetchall()
-        return [self._row_to_session(row) for row in rows]
+        sessions = [self._row_to_session(row) for row in rows]
+        if not include_archived:
+            sessions = [session for session in sessions if not session.get("archived")]
+        if status:
+            status_value = status.lower().strip()
+            sessions = [session for session in sessions if _session_status(session) == status_value]
+        if query:
+            needle = query.lower().strip()
+            if needle:
+                sessions = [session for session in sessions if _matches_query(session, needle)]
+        return sessions
 
     def get(self, session_id: str) -> dict[str, Any] | None:
         with self._connect() as connection:
@@ -100,6 +124,15 @@ class SessionStore:
         self._upsert(session)
         return deepcopy(session)
 
+    def archive(self, session_id: str, archived: bool = True) -> dict[str, Any] | None:
+        return self.update(session_id, {"archived": archived})
+
+    def delete(self, session_id: str) -> bool:
+        with self._connect() as connection:
+            cursor = connection.execute("DELETE FROM patient_sessions WHERE id = ?", (session_id,))
+            connection.commit()
+            return cursor.rowcount > 0
+
     def _upsert(self, session: dict[str, Any]) -> None:
         with self._connect() as connection:
             connection.execute(
@@ -107,8 +140,8 @@ class SessionStore:
                 INSERT INTO patient_sessions (
                     id, created_at, updated_at, patient_json, transcript, summary,
                     doctor_notes, clinical_tool_results_json, imaging_results_json,
-                    warnings_json, finalized
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    warnings_json, finalized, archived
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     updated_at = excluded.updated_at,
                     patient_json = excluded.patient_json,
@@ -118,7 +151,8 @@ class SessionStore:
                     clinical_tool_results_json = excluded.clinical_tool_results_json,
                     imaging_results_json = excluded.imaging_results_json,
                     warnings_json = excluded.warnings_json,
-                    finalized = excluded.finalized
+                    finalized = excluded.finalized,
+                    archived = excluded.archived
                 """,
                 (
                     session["id"],
@@ -132,6 +166,7 @@ class SessionStore:
                     _dump_json(session.get("imagingResults", [])),
                     _dump_json(session.get("warnings", [])),
                     1 if session.get("finalized") else 0,
+                    1 if session.get("archived") else 0,
                 ),
             )
             connection.commit()
@@ -150,7 +185,38 @@ class SessionStore:
             "imagingResults": _load_json(row["imaging_results_json"], []),
             "warnings": _load_json(row["warnings_json"], []),
             "finalized": bool(row["finalized"]),
+            "archived": bool(row["archived"]),
         }
+
+
+def _session_status(session: dict[str, Any]) -> str:
+    if session.get("archived"):
+        return "archived"
+    if session.get("finalized"):
+        return "final"
+    if session.get("summary"):
+        return "summary"
+    if session.get("transcript"):
+        return "transcript"
+    return "draft"
+
+
+def _matches_query(session: dict[str, Any], needle: str) -> bool:
+    patient = session.get("patient") or {}
+    haystack = " ".join(
+        str(value or "")
+        for value in [
+            session.get("id"),
+            patient.get("displayName"),
+            patient.get("age"),
+            patient.get("sex"),
+            patient.get("chiefComplaint"),
+            session.get("summary"),
+            session.get("doctorNotes"),
+            session.get("transcript"),
+        ]
+    ).lower()
+    return needle in haystack
 
 
 def _dump_json(value: Any) -> str:
