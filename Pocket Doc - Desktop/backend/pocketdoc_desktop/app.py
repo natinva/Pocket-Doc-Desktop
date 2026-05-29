@@ -34,6 +34,7 @@ class SessionUpdateRequest(BaseModel):
     doctorNotes: str | None = None
     warnings: list[str] | None = None
     finalized: bool | None = None
+    archived: bool | None = None
 
 
 class TranscriptRequest(BaseModel):
@@ -75,8 +76,12 @@ def create_session(body: SessionCreateRequest) -> dict[str, Any]:
 
 
 @app.get("/api/sessions")
-def list_sessions() -> list[dict[str, Any]]:
-    return store.list()
+def list_sessions(
+    query: str | None = None,
+    status: str | None = None,
+    include_archived: bool = False,
+) -> list[dict[str, Any]]:
+    return store.list(query=query, status=status, include_archived=include_archived)
 
 
 @app.get("/api/sessions/{session_id}")
@@ -94,6 +99,30 @@ def update_session(session_id: str, body: SessionUpdateRequest) -> dict[str, Any
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     return session
+
+
+@app.post("/api/sessions/{session_id}/archive")
+def archive_session(session_id: str) -> dict[str, Any]:
+    session = store.archive(session_id, archived=True)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return session
+
+
+@app.post("/api/sessions/{session_id}/restore")
+def restore_session(session_id: str) -> dict[str, Any]:
+    session = store.archive(session_id, archived=False)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return session
+
+
+@app.delete("/api/sessions/{session_id}")
+def delete_session(session_id: str) -> dict[str, bool]:
+    deleted = store.delete(session_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"deleted": True}
 
 
 @app.get("/api/sessions/{session_id}/report-preview")
@@ -225,13 +254,15 @@ def build_report_preview(session: dict[str, Any]) -> str:
     tool_count = len(session.get("clinicalToolResults") or [])
     imaging_count = len(session.get("imagingResults") or [])
     finalized = "Evet" if session.get("finalized") else "Hayır"
+    archived = "Evet" if session.get("archived") else "Hayır"
     warnings = session.get("warnings") or []
     warning_text = "\n".join(f"- {warning}" for warning in warnings) or "Uyarı girilmedi."
     return (
         "POCKET DOC - KLİNİK GÖRÜŞME TASLAĞI\n\n"
         f"Hasta: {patient_line}\n"
         f"Oturum: {session.get('id')}\n"
-        f"Final onay: {finalized}\n\n"
+        f"Final onay: {finalized}\n"
+        f"Arşiv: {archived}\n\n"
         "AI / Klinik Özet:\n"
         f"{session.get('summary') or 'Henüz özet oluşturulmadı.'}\n\n"
         "Hekim Notu:\n"
@@ -253,6 +284,7 @@ def build_report_html(session: dict[str, Any]) -> str:
         ("Ana şikayet", patient.get("chiefComplaint") or "Belirtilmedi"),
         ("Oturum", session.get("id") or "-"),
         ("Final onay", "Evet" if session.get("finalized") else "Hayır"),
+        ("Arşiv", "Evet" if session.get("archived") else "Hayır"),
     ]
     warnings = session.get("warnings") or []
     warning_html = "".join(f"<li>{escape(str(warning))}</li>" for warning in warnings) or "<li>Uyarı girilmedi.</li>"
