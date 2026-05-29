@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from .config import settings
 from .model_registry import find_model
+from .secure_files import secure_files
 from .session_store import utc_now_iso
 
 
@@ -14,17 +15,14 @@ class ImagingService:
         self.backend = settings.inference_backend
 
     def save_upload(self, content: bytes, filename: str) -> Path:
-        settings.upload_dir.mkdir(parents=True, exist_ok=True)
-        suffix = Path(filename).suffix or ".img"
-        target = settings.upload_dir / f"{uuid4()}{suffix}"
-        target.write_bytes(content)
-        return target
+        return secure_files.save_upload(content, filename, prefix="image")
 
     def analyze(self, model_id: str, image_path: Path, source: str = "upload") -> dict[str, Any]:
         model = find_model(model_id)
         if not model:
             raise KeyError(f"Unknown model id: {model_id}")
 
+        image_size = image_path.stat().st_size if image_path.exists() else None
         if self.backend == "mock":
             return {
                 "id": str(uuid4()),
@@ -35,7 +33,8 @@ class ImagingService:
                 "backend": "mock",
                 "source": source,
                 "imagePath": str(image_path),
-                "imageBytes": image_path.stat().st_size if image_path.exists() else None,
+                "imageBytes": image_size,
+                "fileProtected": secure_files.active and image_path.suffix == ".pdoc",
                 "resultSummaryTR": "Görüntü alındı. Gerçek inference backend'i henüz mock modda.",
                 "detections": [],
                 "warningsTR": [
@@ -45,16 +44,19 @@ class ImagingService:
                 "generatedAt": utc_now_iso(),
             }
 
-        return {
-            "id": str(uuid4()),
-            "modelId": model_id,
-            "modelName": model["name"],
-            "domain": model["domain"],
-            "backend": self.backend,
-            "source": source,
-            "imagePath": str(image_path),
-            "resultSummaryTR": f"{self.backend} backend seçili; adapter implementasyonu sıradaki milestone.",
-            "detections": [],
-            "warningsTR": ["Inference adapter pending."],
-            "generatedAt": utc_now_iso(),
-        }
+        with secure_files.readable_path(image_path, suffix=Path(image_path.name.replace(".pdoc", "")).suffix or ".img") as readable_image:
+            return {
+                "id": str(uuid4()),
+                "modelId": model_id,
+                "modelName": model["name"],
+                "domain": model["domain"],
+                "backend": self.backend,
+                "source": source,
+                "imagePath": str(image_path),
+                "runtimeImagePath": str(readable_image),
+                "fileProtected": secure_files.active and image_path.suffix == ".pdoc",
+                "resultSummaryTR": f"{self.backend} backend seçili; adapter implementasyonu sıradaki milestone.",
+                "detections": [],
+                "warningsTR": ["Inference adapter pending."],
+                "generatedAt": utc_now_iso(),
+            }
