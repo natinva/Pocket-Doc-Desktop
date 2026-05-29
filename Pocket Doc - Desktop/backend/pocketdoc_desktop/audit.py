@@ -24,6 +24,37 @@ def audit_event(action: str, details: dict[str, Any] | None = None) -> None:
         handle.write(json.dumps(event, ensure_ascii=False) + "\n")
 
 
+def read_audit_events(limit: int = 100) -> list[dict[str, Any]]:
+    if not settings.audit_log_path.exists():
+        return []
+    safe_limit = min(max(limit, 1), 500)
+    lines = settings.audit_log_path.read_text(encoding="utf-8").splitlines()[-safe_limit:]
+    events: list[dict[str, Any]] = []
+    for line in lines:
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            events.append({"ts": "", "action": "invalid_log_line", "details": {}})
+            continue
+        if isinstance(parsed, dict):
+            events.append(parsed)
+    return list(reversed(events))
+
+
+def audit_summary() -> dict[str, Any]:
+    events = read_audit_events(limit=500)
+    counts: dict[str, int] = {}
+    for event in events:
+        action = str(event.get("action") or "unknown")
+        counts[action] = counts.get(action, 0) + 1
+    return {
+        "enabled": settings.audit_log_enabled,
+        "path": str(settings.audit_log_path),
+        "recentEventCount": len(events),
+        "actionCounts": counts,
+    }
+
+
 def _scrub(value: Any) -> Any:
     if isinstance(value, dict):
         scrubbed: dict[str, Any] = {}
