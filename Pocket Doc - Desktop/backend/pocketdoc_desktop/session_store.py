@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import json
+import sqlite3
 from copy import deepcopy
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
+
+from .config import settings
 
 
 def utc_now_iso() -> str:
@@ -11,15 +16,43 @@ def utc_now_iso() -> str:
 
 
 class SessionStore:
-    def __init__(self) -> None:
-        self._sessions: dict[str, dict[str, Any]] = {}
+    def __init__(self, database_path: Path | None = None) -> None:
+        self.database_path = database_path or settings.database_path
+        self.database_path.parent.mkdir(parents=True, exist_ok=True)
+        self._init_db()
+
+    def _connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(self.database_path)
+        connection.row_factory = sqlite3.Row
+        return connection
+
+    def _init_db(self) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS patient_sessions (
+                    id TEXT PRIMARY KEY,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    patient_json TEXT NOT NULL,
+                    transcript TEXT NOT NULL DEFAULT '',
+                    summary TEXT NOT NULL DEFAULT '',
+                    doctor_notes TEXT NOT NULL DEFAULT '',
+                    clinical_tool_results_json TEXT NOT NULL DEFAULT '[]',
+                    imaging_results_json TEXT NOT NULL DEFAULT '[]',
+                    warnings_json TEXT NOT NULL DEFAULT '[]',
+                    finalized INTEGER NOT NULL DEFAULT 0
+                )
+                """
+            )
+            connection.commit()
 
     def create(self, patient: dict[str, Any] | None = None) -> dict[str, Any]:
-        session_id = str(uuid4())
+        now = utc_now_iso()
         session = {
-            "id": session_id,
-            "createdAt": utc_now_iso(),
-            "updatedAt": utc_now_iso(),
+            "id": str(uuid4()),
+            "createdAt": now,
+            "updatedAt": now,
             "patient": patient or {},
             "transcript": "",
             "summary": "",
@@ -29,30 +62,105 @@ class SessionStore:
             "warnings": [],
             "finalized": False,
         }
-        self._sessions[session_id] = session
+        self._upsert(session)
         return deepcopy(session)
 
     def list(self) -> list[dict[str, Any]]:
-        return [deepcopy(s) for s in self._sessions.values()]
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM patient_sessions ORDER BY updated_at DESC, created_at DESC"
+            ).fetchall()
+        return [self._row_to_session(row) for row in rows]
 
     def get(self, session_id: str) -> dict[str, Any] | None:
-        session = self._sessions.get(session_id)
-        return deepcopy(session) if session else None
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM patient_sessions WHERE id = ?",
+                (session_id,),
+            ).fetchone()
+        return self._row_to_session(row) if row else None
 
     def update(self, session_id: str, patch: dict[str, Any]) -> dict[str, Any] | None:
-        session = self._sessions.get(session_id)
+        session = self.get(session_id)
         if not session:
             return None
         session.update(patch)
         session["updatedAt"] = utc_now_iso()
+        self._upsert(session)
         return deepcopy(session)
 
     def append(self, session_id: str, key: str, value: dict[str, Any]) -> dict[str, Any] | None:
-        session = self._sessions.get(session_id)
+        session = self.get(session_id)
         if not session:
             return None
         if key not in session or not isinstance(session[key], list):
             session[key] = []
         session[key].append(value)
         session["updatedAt"] = utc_now_iso()
+        self._upsert(session)
         return deepcopy(session)
+
+    def _upsert(self, session: dict[str, Any]) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO patient_sessions (
+                    id, created_at, updated_at, patient_json, transcript, summary,
+                    doctor_notes, clinical_tool_results_json, imaging_results_json,
+                    warnings_json, finalized
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    updated_at = excluded.updated_at,
+                    patient_json = excluded.patient_json,
+                    transcript = excluded.transcript,
+                    summary = excluded.summary,
+                    doctor_notes = excluded.doctor_notes,
+                    clinical_tool_results_json = excluded.clinical_tool_results_json,
+                    imaging_results_json = excluded.imaging_results_json,
+                    warnings_json = excluded.warnings_json,
+                    finalized = excluded.finalized
+                """,
+                (
+                    session["id"],
+                    session.get("createdAt") or utc_now_iso(),
+                    session.get("updatedAt") or utc_now_iso(),
+                    _dump_json(session.get("patient", {})),
+                    session.get("transcript", ""),
+                    session.get("summary", ""),
+                    session.get("doctorNotes", ""),
+                    _dump_json(session.get("clinicalToolResults", [])),
+                    _dump_json(session.get("imagingResults", [])),
+                    _dump_json(session.get("warnings", [])),
+                    1 if session.get("finalized") else 0,
+                ),
+            )
+            connection.commit()
+
+    @staticmethod
+    def _row_to_session(row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "id": row["id"],
+            "createdAt": row["created_at"],
+            "updatedAt": row["updated_at"],
+            "patient": _load_json(row["patient_json"], {}),
+            "transcript": row["transcript"] or "",
+            "summary": row["summary"] or "",
+            "doctorNotes": row["doctor_notes"] or "",
+            "clinicalToolResults": _load_json(row["clinical_tool_results_json"], []),
+            "imagingResults": _load_json(row["imaging_results_json"], []),
+            "warnings": _load_json(row["warnings_json"], []),
+            "finalized": bool(row["finalized"]),
+        }
+
+
+def _dump_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _load_json(value: str | None, fallback: Any) -> Any:
+    if not value:
+        return deepcopy(fallback)
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return deepcopy(fallback)
