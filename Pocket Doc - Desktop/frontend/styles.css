@@ -170,6 +170,10 @@ textarea {
   gap: 8px;
 }
 
+.compact-header {
+  margin-bottom: 6px;
+}
+
 .recording-dot {
   width: 10px;
   height: 10px;
@@ -223,6 +227,22 @@ textarea {
 .screen {
   display: grid;
   gap: 8px;
+}
+
+.patientsum-screen {
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+  align-items: start;
+}
+
+.patient-card,
+.doctor-card {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.patient-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .tools-screen {
@@ -284,6 +304,19 @@ textarea {
   resize: vertical;
 }
 
+.patientsum-screen .field textarea {
+  min-height: 92px;
+}
+
+.patientsum-screen #transcriptText {
+  min-height: 118px;
+}
+
+.patientsum-screen #doctorNotesText,
+.patientsum-screen #warningsText {
+  min-height: 74px;
+}
+
 .actions {
   display: flex;
   gap: 7px;
@@ -323,6 +356,35 @@ textarea {
   line-height: 17px;
 }
 
+.summary-result {
+  max-height: 116px;
+}
+
+.report-result {
+  max-height: 156px;
+  border-left-color: var(--amber);
+}
+
+.final-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 62px;
+  min-height: 28px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: #fffaf0;
+  color: var(--amber);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.final-badge.done {
+  background: var(--soft);
+  color: var(--teal);
+  border-color: rgba(15, 118, 110, 0.25);
+}
+
 .warning {
   border-left-color: var(--amber);
 }
@@ -348,7 +410,9 @@ textarea {
 @media (max-width: 700px) {
   .split,
   .field-grid,
-  .choice-grid {
+  .choice-grid,
+  .patientsum-screen,
+  .patient-grid {
     grid-template-columns: 1fr;
   }
 
@@ -372,5 +436,13 @@ textarea {
 
   .tools-screen {
     height: calc(100vh - 64px);
+  }
+
+  .patientsum-screen .field textarea {
+    min-height: 68px;
+  }
+
+  .patientsum-screen #transcriptText {
+    min-height: 90px;
   }
 }
