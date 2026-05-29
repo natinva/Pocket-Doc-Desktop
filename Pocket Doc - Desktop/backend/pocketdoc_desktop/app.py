@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTex
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from .audit import audit_event
+from .audit import audit_event, audit_summary, read_audit_events
 from .clinical_tools import clinical_tools_summary, list_clinical_tools, run_tool
 from .config import PROJECT_ROOT, settings
 from .imaging import ImagingService
@@ -22,7 +22,6 @@ from .session_store import SessionStore
 
 FRONTEND_DIR = PROJECT_ROOT / "frontend"
 PROTECTED_PREFIXES = ("/api/sessions",)
-PUBLIC_PREFIXES = ("/", "/static", "/api/health", "/api/security", "/api/kiosk/config", "/api/models", "/api/clinical-tools")
 
 app = FastAPI(title="Pocket Doc - Desktop", version="0.1.0")
 store = SessionStore()
@@ -66,7 +65,7 @@ if FRONTEND_DIR.exists():
 async def protect_patient_data(request: Request, call_next):
     path = request.url.path
     if _requires_access_token(path):
-        token = request.headers.get("x-pocketdoc-access-token") or request.query_params.get("access_token")
+        token = request.headers.get("x-pocketdoc-access-token")
         if not access_tokens.verify(token):
             audit_event("access_denied", {"path": path, "method": request.method})
             return JSONResponse({"detail": "Device locked or token expired"}, status_code=401)
@@ -105,6 +104,21 @@ def get_security_status() -> dict[str, Any]:
     return security_status()
 
 
+@app.get("/api/security/overview")
+def security_overview() -> dict[str, Any]:
+    session_summary = summarize_sessions(store.list(include_archived=True))
+    return {
+        "security": security_status(),
+        "sessions": session_summary,
+        "audit": audit_summary(),
+    }
+
+
+@app.get("/api/security/audit")
+def get_audit_events(limit: int = 100) -> dict[str, Any]:
+    return {"events": read_audit_events(limit=limit), "summary": audit_summary()}
+
+
 @app.post("/api/security/verify-pin")
 def verify_pin(body: VerifyPinRequest) -> dict[str, Any]:
     if not settings.device_pin:
@@ -122,7 +136,7 @@ def verify_pin(body: VerifyPinRequest) -> dict[str, Any]:
 
 @app.post("/api/security/revoke-token")
 def revoke_token(request: Request) -> dict[str, bool]:
-    token = request.headers.get("x-pocketdoc-access-token") or request.query_params.get("access_token")
+    token = request.headers.get("x-pocketdoc-access-token")
     access_tokens.revoke(token)
     audit_event("token_revoked", {})
     return {"ok": True}
@@ -322,6 +336,20 @@ def security_status() -> dict[str, Any]:
         "dataStorage": "local-sqlite",
         "noticeTR": "Hasta verisi bu cihazda lokal olarak saklanır. Klinik kullanımda KVKK ve kurum politikaları doğrultusunda hekim sorumluluğunda yönetilmelidir.",
     }
+
+
+def summarize_sessions(sessions: list[dict[str, Any]]) -> dict[str, int]:
+    summary = {"total": len(sessions), "active": 0, "archived": 0, "finalized": 0, "draft": 0}
+    for session in sessions:
+        if session.get("archived"):
+            summary["archived"] += 1
+        else:
+            summary["active"] += 1
+        if session.get("finalized"):
+            summary["finalized"] += 1
+        if not session.get("summary") and not session.get("transcript") and not session.get("finalized"):
+            summary["draft"] += 1
+    return summary
 
 
 def build_report_preview(session: dict[str, Any]) -> str:
