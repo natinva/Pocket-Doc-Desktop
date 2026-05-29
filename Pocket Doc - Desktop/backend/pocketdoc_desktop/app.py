@@ -5,20 +5,24 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from .audit import audit_event
 from .clinical_tools import clinical_tools_summary, list_clinical_tools, run_tool
 from .config import PROJECT_ROOT, settings
 from .imaging import ImagingService
 from .model_registry import flatten_models, registry_summary
 from .patientsum import PatientSumService
+from .security import access_tokens
 from .session_store import SessionStore
 
 
 FRONTEND_DIR = PROJECT_ROOT / "frontend"
+PROTECTED_PREFIXES = ("/api/sessions",)
+PUBLIC_PREFIXES = ("/", "/static", "/api/health", "/api/security", "/api/kiosk/config", "/api/models", "/api/clinical-tools")
 
 app = FastAPI(title="Pocket Doc - Desktop", version="0.1.0")
 store = SessionStore()
@@ -58,6 +62,26 @@ if FRONTEND_DIR.exists():
     app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
 
 
+@app.middleware("http")
+async def protect_patient_data(request: Request, call_next):
+    path = request.url.path
+    if _requires_access_token(path):
+        token = request.headers.get("x-pocketdoc-access-token") or request.query_params.get("access_token")
+        if not access_tokens.verify(token):
+            audit_event("access_denied", {"path": path, "method": request.method})
+            return JSONResponse({"detail": "Device locked or token expired"}, status_code=401)
+    response = await call_next(request)
+    if _requires_access_token(path) and response.status_code < 500:
+        audit_event("api_access", {"path": path, "method": request.method, "status": response.status_code})
+    return response
+
+
+def _requires_access_token(path: str) -> bool:
+    if not settings.device_pin:
+        return False
+    return any(path.startswith(prefix) for prefix in PROTECTED_PREFIXES)
+
+
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(FRONTEND_DIR / "index.html")
@@ -82,18 +106,33 @@ def get_security_status() -> dict[str, Any]:
 
 
 @app.post("/api/security/verify-pin")
-def verify_pin(body: VerifyPinRequest) -> dict[str, bool]:
+def verify_pin(body: VerifyPinRequest) -> dict[str, Any]:
     if not settings.device_pin:
-        return {"ok": True}
+        token_payload = access_tokens.issue()
+        audit_event("pin_not_required", {})
+        return {"ok": True, **token_payload}
     is_valid = compare_digest(str(body.pin), str(settings.device_pin))
     if not is_valid:
+        audit_event("pin_failed", {})
         raise HTTPException(status_code=401, detail="Invalid PIN")
+    token_payload = access_tokens.issue()
+    audit_event("pin_success", {})
+    return {"ok": True, **token_payload}
+
+
+@app.post("/api/security/revoke-token")
+def revoke_token(request: Request) -> dict[str, bool]:
+    token = request.headers.get("x-pocketdoc-access-token") or request.query_params.get("access_token")
+    access_tokens.revoke(token)
+    audit_event("token_revoked", {})
     return {"ok": True}
 
 
 @app.post("/api/sessions")
 def create_session(body: SessionCreateRequest) -> dict[str, Any]:
-    return store.create(body.patient)
+    session = store.create(body.patient)
+    audit_event("session_created", {"session_id": session.get("id")})
+    return session
 
 
 @app.get("/api/sessions")
@@ -119,6 +158,7 @@ def update_session(session_id: str, body: SessionUpdateRequest) -> dict[str, Any
     session = store.update(session_id, patch)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+    audit_event("session_updated", {"session_id": session_id, "fields": list(patch.keys())})
     return session
 
 
@@ -127,6 +167,7 @@ def archive_session(session_id: str) -> dict[str, Any]:
     session = store.archive(session_id, archived=True)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+    audit_event("session_archived", {"session_id": session_id})
     return session
 
 
@@ -135,6 +176,7 @@ def restore_session(session_id: str) -> dict[str, Any]:
     session = store.archive(session_id, archived=False)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+    audit_event("session_restored", {"session_id": session_id})
     return session
 
 
@@ -143,6 +185,7 @@ def delete_session(session_id: str) -> dict[str, bool]:
     deleted = store.delete(session_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Session not found")
+    audit_event("session_deleted", {"session_id": session_id})
     return {"deleted": True}
 
 
@@ -151,6 +194,7 @@ def report_preview(session_id: str) -> dict[str, Any]:
     session = store.get(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+    audit_event("report_preview", {"session_id": session_id})
     return {"session": session, "report": build_report_preview(session)}
 
 
@@ -159,6 +203,7 @@ def export_report_txt(session_id: str) -> PlainTextResponse:
     session = store.get(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+    audit_event("report_txt_exported", {"session_id": session_id})
     filename = f"pocketdoc-report-{session_id[:8]}.txt"
     return PlainTextResponse(
         build_report_preview(session),
@@ -171,6 +216,7 @@ def export_report_html(session_id: str) -> HTMLResponse:
     session = store.get(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+    audit_event("report_html_opened", {"session_id": session_id})
     filename = f"pocketdoc-report-{session_id[:8]}.html"
     return HTMLResponse(
         build_report_html(session),
@@ -183,6 +229,7 @@ def set_transcript(session_id: str, body: TranscriptRequest) -> dict[str, Any]:
     session = store.update(session_id, {"transcript": body.transcript})
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+    audit_event("transcript_saved", {"session_id": session_id})
     return session
 
 
@@ -193,6 +240,7 @@ def generate_summary(session_id: str, body: SummaryRequest) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="Session not found")
     result = patient_sum.summarize_text(session.get("transcript", ""), language=body.language)
     updated = store.update(session_id, {"summary": result["summary"]})
+    audit_event("summary_generated", {"session_id": session_id, "language": body.language})
     return {"session": updated, "result": result}
 
 
@@ -210,6 +258,7 @@ async def transcribe_audio(session_id: str, language: str = "tr", file: UploadFi
         session = store.update(session_id, {"transcript": result["transcript"]})
     else:
         session = store.get(session_id)
+    audit_event("audio_transcribed", {"session_id": session_id, "language": language})
     return {"session": session, "result": result}
 
 
@@ -229,6 +278,7 @@ def run_clinical_tool(session_id: str, tool_id: str, body: ToolRunRequest) -> di
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     session = store.append(session_id, "clinicalToolResults", result)
+    audit_event("clinical_tool_run", {"session_id": session_id, "tool_id": tool_id})
     return {"session": session, "result": result}
 
 
@@ -248,6 +298,7 @@ async def analyze_image(session_id: str, model_id: str, file: UploadFile = File(
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     session = store.append(session_id, "imagingResults", result)
+    audit_event("imaging_analyzed", {"session_id": session_id, "model_id": model_id})
     return {"session": session, "result": result}
 
 
@@ -265,7 +316,9 @@ def security_status() -> dict[str, Any]:
     return {
         "pinEnabled": bool(settings.device_pin),
         "lockTimeoutSeconds": settings.device_lock_timeout_seconds,
+        "accessTokenTtlSeconds": settings.access_token_ttl_seconds,
         "localOnlyMode": settings.local_only_mode,
+        "auditLogEnabled": settings.audit_log_enabled,
         "dataStorage": "local-sqlite",
         "noticeTR": "Hasta verisi bu cihazda lokal olarak saklanır. Klinik kullanımda KVKK ve kurum politikaları doğrultusunda hekim sorumluluğunda yönetilmelidir.",
     }
