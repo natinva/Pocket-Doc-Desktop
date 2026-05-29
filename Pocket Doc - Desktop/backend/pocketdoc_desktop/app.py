@@ -1,0 +1,161 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+
+from .clinical_tools import clinical_tools_summary, list_clinical_tools, run_tool
+from .config import PROJECT_ROOT, settings
+from .imaging import ImagingService
+from .model_registry import flatten_models, registry_summary
+from .patientsum import PatientSumService
+from .session_store import SessionStore
+
+
+FRONTEND_DIR = PROJECT_ROOT / "frontend"
+
+app = FastAPI(title="Pocket Doc - Desktop", version="0.1.0")
+store = SessionStore()
+patient_sum = PatientSumService()
+imaging = ImagingService()
+
+
+class SessionCreateRequest(BaseModel):
+    patient: dict[str, Any] = Field(default_factory=dict)
+
+
+class TranscriptRequest(BaseModel):
+    transcript: str
+
+
+class SummaryRequest(BaseModel):
+    language: str = "tr"
+
+
+class ToolRunRequest(BaseModel):
+    inputs: dict[str, Any] = Field(default_factory=dict)
+
+
+if FRONTEND_DIR.exists():
+    app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
+
+
+@app.get("/")
+def index() -> FileResponse:
+    return FileResponse(FRONTEND_DIR / "index.html")
+
+
+@app.get("/api/health")
+def health() -> dict[str, Any]:
+    return {
+        "ok": True,
+        "env": settings.env,
+        "inferenceBackend": settings.inference_backend,
+        "patientSumEnabled": patient_sum.enabled,
+        "modelRegistry": registry_summary(),
+        "clinicalTools": clinical_tools_summary(),
+    }
+
+
+@app.post("/api/sessions")
+def create_session(body: SessionCreateRequest) -> dict[str, Any]:
+    return store.create(body.patient)
+
+
+@app.get("/api/sessions")
+def list_sessions() -> list[dict[str, Any]]:
+    return store.list()
+
+
+@app.get("/api/sessions/{session_id}")
+def get_session(session_id: str) -> dict[str, Any]:
+    session = store.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return session
+
+
+@app.post("/api/sessions/{session_id}/transcript")
+def set_transcript(session_id: str, body: TranscriptRequest) -> dict[str, Any]:
+    session = store.update(session_id, {"transcript": body.transcript})
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return session
+
+
+@app.post("/api/sessions/{session_id}/summary")
+def generate_summary(session_id: str, body: SummaryRequest) -> dict[str, Any]:
+    session = store.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    result = patient_sum.summarize_text(session.get("transcript", ""), language=body.language)
+    updated = store.update(session_id, {"summary": result["summary"]})
+    return {"session": updated, "result": result}
+
+
+@app.post("/api/sessions/{session_id}/audio/transcribe")
+async def transcribe_audio(session_id: str, language: str = "tr", file: UploadFile = File(...)) -> dict[str, Any]:
+    if not store.get(session_id):
+        raise HTTPException(status_code=404, detail="Session not found")
+    content = await file.read()
+    settings.upload_dir.mkdir(parents=True, exist_ok=True)
+    suffix = Path(file.filename or "audio.webm").suffix or ".webm"
+    audio_path = settings.upload_dir / f"{session_id}-audio{suffix}"
+    audio_path.write_bytes(content)
+    result = patient_sum.transcribe_audio(audio_path, language=language)
+    if result.get("transcript"):
+        session = store.update(session_id, {"transcript": result["transcript"]})
+    else:
+        session = store.get(session_id)
+    return {"session": session, "result": result}
+
+
+@app.get("/api/clinical-tools")
+def list_tools() -> list[dict[str, Any]]:
+    return list_clinical_tools()
+
+
+@app.post("/api/sessions/{session_id}/clinical-tools/{tool_id}")
+def run_clinical_tool(session_id: str, tool_id: str, body: ToolRunRequest) -> dict[str, Any]:
+    if not store.get(session_id):
+        raise HTTPException(status_code=404, detail="Session not found")
+    try:
+        result = run_tool(tool_id, body.inputs)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    session = store.append(session_id, "clinicalToolResults", result)
+    return {"session": session, "result": result}
+
+
+@app.get("/api/models")
+def list_models() -> list[dict[str, Any]]:
+    return flatten_models()
+
+
+@app.post("/api/sessions/{session_id}/imaging/{model_id}")
+async def analyze_image(session_id: str, model_id: str, file: UploadFile = File(...)) -> dict[str, Any]:
+    if not store.get(session_id):
+        raise HTTPException(status_code=404, detail="Session not found")
+    content = await file.read()
+    image_path = imaging.save_upload(content, file.filename or "image")
+    try:
+        result = imaging.analyze(model_id, image_path)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    session = store.append(session_id, "imagingResults", result)
+    return {"session": session, "result": result}
+
+
+@app.get("/api/kiosk/config")
+def kiosk_config() -> dict[str, Any]:
+    return {
+        "screen": {"width": 800, "height": 480, "touch": True},
+        "recommendedBrowser": "chromium --kiosk http://localhost:8765",
+        "pi": {"model": "Raspberry Pi 5", "ramGb": 16, "accelerator": "AI HAT+ 26 TOPS"},
+    }

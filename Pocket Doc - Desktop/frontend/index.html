@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pocket Doc - Desktop</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <strong>Pocket Doc</strong>
+          <span id="statusText">Başlatılıyor</span>
+        </div>
+        <div class="topbar-actions">
+          <button id="homeBtn" class="compact-btn">Ana</button>
+          <button id="newSessionBtn" class="compact-btn">Yeni</button>
+        </div>
+      </header>
+
+      <section id="content" class="content"></section>
+    </main>
+    <script src="/static/app.js" type="module"></script>
+  </body>
+</html>
