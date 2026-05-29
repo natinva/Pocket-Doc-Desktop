@@ -32,6 +32,9 @@ class Settings:
     data_dir: Path = _path_from_env("POCKETDOC_DATA_DIR", PROJECT_ROOT / "data")
     reports_dir: Path = _path_from_env("POCKETDOC_REPORTS_DIR", PROJECT_ROOT / "reports")
     database_path: Path = _path_from_env("POCKETDOC_DATABASE_PATH", PROJECT_ROOT / "data" / "pocketdoc.sqlite3")
+    device_pin: str | None = os.getenv("POCKETDOC_DEVICE_PIN") or None
+    device_lock_timeout_seconds: int = int(os.getenv("POCKETDOC_LOCK_TIMEOUT_SECONDS", "900"))
+    local_only_mode: bool = os.getenv("POCKETDOC_LOCAL_ONLY_MODE", "true").lower() in {"1", "true", "yes", "on"}
     openai_api_key: str | None = os.getenv("OPENAI_API_KEY") or None
     openai_transcribe_model: str = os.getenv("OPENAI_TRANSCRIBE_MODEL", "whisper-1")
     openai_summary_model: str = os.getenv("OPENAI_SUMMARY_MODEL", "gpt-4.1-mini")
