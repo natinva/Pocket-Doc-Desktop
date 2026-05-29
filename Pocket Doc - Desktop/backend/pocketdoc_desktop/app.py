@@ -15,6 +15,7 @@ from .config import PROJECT_ROOT, settings
 from .imaging import ImagingService
 from .model_registry import flatten_models, registry_summary
 from .patientsum import PatientSumService
+from .secure_files import secure_files
 from .security import access_tokens, pin_is_enabled, pin_storage_mode, verify_pin_value
 from .session_store import SessionStore
 
@@ -261,16 +262,17 @@ async def transcribe_audio(session_id: str, language: str = "tr", file: UploadFi
     if not store.get(session_id):
         raise HTTPException(status_code=404, detail="Session not found")
     content = await file.read()
-    settings.upload_dir.mkdir(parents=True, exist_ok=True)
+    audio_path = secure_files.save_upload(content, file.filename or "audio.webm", prefix=f"{session_id}-audio")
     suffix = Path(file.filename or "audio.webm").suffix or ".webm"
-    audio_path = settings.upload_dir / f"{session_id}-audio{suffix}"
-    audio_path.write_bytes(content)
-    result = patient_sum.transcribe_audio(audio_path, language=language)
+    with secure_files.readable_path(audio_path, suffix=suffix) as readable_audio:
+        result = patient_sum.transcribe_audio(readable_audio, language=language)
+    result["audioPath"] = str(audio_path)
+    result["fileProtected"] = secure_files.active and audio_path.suffix == ".pdoc"
     if result.get("transcript"):
         session = store.update(session_id, {"transcript": result["transcript"]})
     else:
         session = store.get(session_id)
-    audit_event("audio_transcribed", {"session_id": session_id, "language": language})
+    audit_event("audio_transcribed", {"session_id": session_id, "language": language, "fileProtected": result["fileProtected"]})
     return {"session": session, "result": result}
 
 
@@ -310,7 +312,7 @@ async def analyze_image(session_id: str, model_id: str, file: UploadFile = File(
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     session = store.append(session_id, "imagingResults", result)
-    audit_event("imaging_analyzed", {"session_id": session_id, "model_id": model_id})
+    audit_event("imaging_analyzed", {"session_id": session_id, "model_id": model_id, "fileProtected": result.get("fileProtected")})
     return {"session": session, "result": result}
 
 
@@ -332,6 +334,7 @@ def security_status() -> dict[str, Any]:
         "accessTokenTtlSeconds": settings.access_token_ttl_seconds,
         "localOnlyMode": settings.local_only_mode,
         "auditLogEnabled": settings.audit_log_enabled,
+        "fileProtection": secure_files.status(),
         "dataStorage": "local-sqlite",
         "noticeTR": "Hasta verisi bu cihazda lokal olarak saklanır. Klinik kullanımda KVKK ve kurum politikaları doğrultusunda hekim sorumluluğunda yönetilmelidir.",
     }
