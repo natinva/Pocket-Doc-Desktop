@@ -7,6 +7,11 @@ const state = {
   screen: "home",
   session: null,
   sessions: [],
+  sessionFilters: {
+    query: "",
+    status: "",
+    includeArchived: false,
+  },
   health: null,
   models: [],
   selectedModelId: "",
@@ -42,7 +47,12 @@ function escapeHtml(value) {
 }
 
 async function loadSessions() {
-  state.sessions = await api("/api/sessions");
+  const params = new URLSearchParams();
+  if (state.sessionFilters.query) params.set("query", state.sessionFilters.query);
+  if (state.sessionFilters.status) params.set("status", state.sessionFilters.status);
+  if (state.sessionFilters.includeArchived) params.set("include_archived", "true");
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  state.sessions = await api(`/api/sessions${suffix}`);
   return state.sessions;
 }
 
@@ -52,6 +62,8 @@ async function createSession() {
     body: JSON.stringify({ patient: { displayName: "Yeni hasta" } }),
   });
   state.reportPreview = "";
+  state.sessionFilters.status = "";
+  state.sessionFilters.includeArchived = false;
   await loadSessions();
   updateStatus("yeni oturum");
   render();
@@ -68,7 +80,8 @@ async function openSession(sessionId, targetScreen = "voice") {
 function updateStatus(extra = "") {
   const sessionId = state.session ? state.session.id.slice(0, 8) : "yok";
   const finalized = state.session?.finalized ? " - final" : "";
-  statusText.textContent = `Oturum ${sessionId}${finalized}${extra ? " - " + extra : ""}`;
+  const archived = state.session?.archived ? " - arşiv" : "";
+  statusText.textContent = `Oturum ${sessionId}${finalized}${archived}${extra ? " - " + extra : ""}`;
 }
 
 function setScreen(screen) {
@@ -91,10 +104,10 @@ function render() {
 function renderHome() {
   const models = state.health?.modelRegistry;
   const tools = state.health?.clinicalTools;
-  const recentSessions = state.sessions.slice(0, 6);
+  const recentSessions = state.sessions.slice(0, 12);
   const recentHtml = recentSessions.length
     ? recentSessions.map((session) => renderSessionCard(session)).join("")
-    : `<div class="empty-state">Henüz kayıtlı oturum yok.</div>`;
+    : `<div class="empty-state">Bu filtrelerle kayıtlı oturum bulunamadı.</div>`;
 
   content.innerHTML = `
     <section class="home-hero">
@@ -129,9 +142,23 @@ function renderHome() {
         <div class="module-header compact-header">
           <div>
             <h1>Son Oturumlar</h1>
-            <p class="muted">SQLite kayıtlarından son görüşmeleri geri açabilirsiniz.</p>
+            <p class="muted">Hasta adı, şikayet veya durum filtresiyle arayın; arşivlenenleri isteğe bağlı gösterin.</p>
           </div>
           <button class="secondary-btn" id="refreshSessionsBtn">Yenile</button>
+        </div>
+        <div class="session-filters">
+          <input id="sessionSearchInput" value="${escapeHtml(state.sessionFilters.query)}" placeholder="Hasta adı, şikayet veya not ara" />
+          <select id="sessionStatusFilter">
+            <option value="" ${!state.sessionFilters.status ? "selected" : ""}>Tüm aktifler</option>
+            <option value="draft" ${state.sessionFilters.status === "draft" ? "selected" : ""}>Taslak</option>
+            <option value="transcript" ${state.sessionFilters.status === "transcript" ? "selected" : ""}>Transkript</option>
+            <option value="summary" ${state.sessionFilters.status === "summary" ? "selected" : ""}>Özetli</option>
+            <option value="final" ${state.sessionFilters.status === "final" ? "selected" : ""}>Final</option>
+            <option value="archived" ${state.sessionFilters.status === "archived" ? "selected" : ""}>Arşiv</option>
+          </select>
+          <label class="inline-check"><input id="includeArchivedInput" type="checkbox" ${state.sessionFilters.includeArchived ? "checked" : ""} /> Arşiv dahil</label>
+          <button class="secondary-btn" id="applySessionFiltersBtn">Ara</button>
+          <button class="secondary-btn" id="clearSessionFiltersBtn">Temizle</button>
         </div>
         <div class="session-list">${recentHtml}</div>
       </div>
@@ -140,14 +167,70 @@ function renderHome() {
   document.querySelectorAll("[data-go]").forEach((button) => {
     button.onclick = () => setScreen(button.dataset.go);
   });
-  document.querySelector("#refreshSessionsBtn").onclick = async () => {
-    await loadSessions();
-    updateStatus("oturum listesi yenilendi");
-    renderHome();
+  document.querySelector("#refreshSessionsBtn").onclick = refreshSessions;
+  document.querySelector("#applySessionFiltersBtn").onclick = applySessionFilters;
+  document.querySelector("#clearSessionFiltersBtn").onclick = clearSessionFilters;
+  document.querySelector("#sessionSearchInput").onkeydown = (event) => {
+    if (event.key === "Enter") applySessionFilters();
   };
-  document.querySelectorAll("[data-session-id]").forEach((button) => {
-    button.onclick = () => openSession(button.dataset.sessionId, "voice");
+  document.querySelectorAll("[data-session-open]").forEach((button) => {
+    button.onclick = () => openSession(button.dataset.sessionOpen, "voice");
   });
+  document.querySelectorAll("[data-session-archive]").forEach((button) => {
+    button.onclick = () => archiveSession(button.dataset.sessionArchive);
+  });
+  document.querySelectorAll("[data-session-restore]").forEach((button) => {
+    button.onclick = () => restoreSession(button.dataset.sessionRestore);
+  });
+  document.querySelectorAll("[data-session-delete]").forEach((button) => {
+    button.onclick = () => deleteSession(button.dataset.sessionDelete);
+  });
+}
+
+async function applySessionFilters() {
+  state.sessionFilters.query = document.querySelector("#sessionSearchInput").value.trim();
+  state.sessionFilters.status = document.querySelector("#sessionStatusFilter").value;
+  state.sessionFilters.includeArchived = document.querySelector("#includeArchivedInput").checked;
+  await refreshSessions("filtre uygulandı");
+}
+
+async function clearSessionFilters() {
+  state.sessionFilters = { query: "", status: "", includeArchived: false };
+  await refreshSessions("filtre temizlendi");
+}
+
+async function refreshSessions(message = "oturum listesi yenilendi") {
+  await loadSessions();
+  updateStatus(message);
+  renderHome();
+}
+
+async function archiveSession(sessionId) {
+  await api(`/api/sessions/${sessionId}/archive`, { method: "POST" });
+  if (state.session?.id === sessionId) state.session.archived = true;
+  await refreshSessions("oturum arşivlendi");
+}
+
+async function restoreSession(sessionId) {
+  const session = await api(`/api/sessions/${sessionId}/restore`, { method: "POST" });
+  if (state.session?.id === sessionId) state.session = session;
+  await refreshSessions("oturum geri alındı");
+}
+
+async function deleteSession(sessionId) {
+  const ok = window.confirm("Bu oturumu kalıcı olarak silmek istediğinize emin misiniz?");
+  if (!ok) return;
+  await api(`/api/sessions/${sessionId}`, { method: "DELETE" });
+  await loadSessions();
+  if (state.session?.id === sessionId) {
+    state.session = state.sessions[0] || null;
+    state.reportPreview = "";
+  }
+  if (!state.session) await createSession();
+  else {
+    updateStatus("oturum silindi");
+    renderHome();
+  }
 }
 
 function renderSessionCard(session) {
@@ -156,18 +239,24 @@ function renderSessionCard(session) {
   const complaint = patient.chiefComplaint || "Ana şikayet yok";
   const updated = formatDateTime(session.updatedAt || session.createdAt);
   const active = state.session?.id === session.id;
-  const status = session.finalized ? "Final" : session.summary ? "Özetli" : session.transcript ? "Transkript" : "Taslak";
+  const status = session.archived ? "Arşiv" : session.finalized ? "Final" : session.summary ? "Özetli" : session.transcript ? "Transkript" : "Taslak";
   return `
-    <button class="session-card ${active ? "selected" : ""}" data-session-id="${escapeHtml(session.id)}">
-      <div>
+    <article class="session-card ${active ? "selected" : ""} ${session.archived ? "archived" : ""}">
+      <button class="session-open" data-session-open="${escapeHtml(session.id)}">
         <strong>${escapeHtml(name)}</strong>
         <span>${escapeHtml(complaint)}</span>
-      </div>
+      </button>
       <div class="session-meta">
         <small>${escapeHtml(updated)}</small>
         <em>${escapeHtml(status)}</em>
       </div>
-    </button>
+      <div class="session-actions">
+        ${session.archived
+          ? `<button class="mini-btn" data-session-restore="${escapeHtml(session.id)}">Geri al</button>`
+          : `<button class="mini-btn" data-session-archive="${escapeHtml(session.id)}">Arşivle</button>`}
+        <button class="mini-btn danger-mini" data-session-delete="${escapeHtml(session.id)}">Sil</button>
+      </div>
+    </article>
   `;
 }
 
@@ -530,11 +619,11 @@ async function analyzeImage() {
 async function init() {
   homeBtn.onclick = backHome;
   newSessionBtn.onclick = createSession;
-  const [health, models, sessions] = await Promise.all([api("/api/health"), api("/api/models"), api("/api/sessions")]);
+  const [health, models] = await Promise.all([api("/api/health"), api("/api/models")]);
   state.health = health;
   state.models = models;
-  state.sessions = sessions;
   state.selectedModelId = models[0]?.id || "";
+  const sessions = await loadSessions();
   if (sessions.length) {
     state.session = sessions[0];
     updateStatus("son oturum açıldı");
