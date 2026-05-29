@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from hmac import compare_digest
 from html import escape
 from pathlib import Path
 from typing import Any
@@ -16,7 +15,7 @@ from .config import PROJECT_ROOT, settings
 from .imaging import ImagingService
 from .model_registry import flatten_models, registry_summary
 from .patientsum import PatientSumService
-from .security import access_tokens
+from .security import access_tokens, pin_is_enabled, pin_storage_mode, verify_pin_value
 from .session_store import SessionStore
 
 
@@ -76,7 +75,7 @@ async def protect_patient_data(request: Request, call_next):
 
 
 def _requires_access_token(path: str) -> bool:
-    if not settings.device_pin:
+    if not pin_is_enabled():
         return False
     return any(path.startswith(prefix) for prefix in PROTECTED_PREFIXES)
 
@@ -121,16 +120,15 @@ def get_audit_events(limit: int = 100) -> dict[str, Any]:
 
 @app.post("/api/security/verify-pin")
 def verify_pin(body: VerifyPinRequest) -> dict[str, Any]:
-    if not settings.device_pin:
+    if not pin_is_enabled():
         token_payload = access_tokens.issue()
         audit_event("pin_not_required", {})
         return {"ok": True, **token_payload}
-    is_valid = compare_digest(str(body.pin), str(settings.device_pin))
-    if not is_valid:
-        audit_event("pin_failed", {})
+    if not verify_pin_value(body.pin):
+        audit_event("pin_failed", {"mode": pin_storage_mode()})
         raise HTTPException(status_code=401, detail="Invalid PIN")
     token_payload = access_tokens.issue()
-    audit_event("pin_success", {})
+    audit_event("pin_success", {"mode": pin_storage_mode()})
     return {"ok": True, **token_payload}
 
 
@@ -328,7 +326,8 @@ def kiosk_config() -> dict[str, Any]:
 
 def security_status() -> dict[str, Any]:
     return {
-        "pinEnabled": bool(settings.device_pin),
+        "pinEnabled": pin_is_enabled(),
+        "pinStorageMode": pin_storage_mode(),
         "lockTimeoutSeconds": settings.device_lock_timeout_seconds,
         "accessTokenTtlSeconds": settings.access_token_ttl_seconds,
         "localOnlyMode": settings.local_only_mode,
