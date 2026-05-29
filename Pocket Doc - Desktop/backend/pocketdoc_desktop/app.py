@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from hmac import compare_digest
 from html import escape
 from pathlib import Path
 from typing import Any
@@ -49,6 +50,10 @@ class ToolRunRequest(BaseModel):
     inputs: dict[str, Any] = Field(default_factory=dict)
 
 
+class VerifyPinRequest(BaseModel):
+    pin: str = ""
+
+
 if FRONTEND_DIR.exists():
     app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
 
@@ -67,7 +72,23 @@ def health() -> dict[str, Any]:
         "patientSumEnabled": patient_sum.enabled,
         "modelRegistry": registry_summary(),
         "clinicalTools": clinical_tools_summary(),
+        "security": security_status(),
     }
+
+
+@app.get("/api/security/status")
+def get_security_status() -> dict[str, Any]:
+    return security_status()
+
+
+@app.post("/api/security/verify-pin")
+def verify_pin(body: VerifyPinRequest) -> dict[str, bool]:
+    if not settings.device_pin:
+        return {"ok": True}
+    is_valid = compare_digest(str(body.pin), str(settings.device_pin))
+    if not is_valid:
+        raise HTTPException(status_code=401, detail="Invalid PIN")
+    return {"ok": True}
 
 
 @app.post("/api/sessions")
@@ -236,6 +257,17 @@ def kiosk_config() -> dict[str, Any]:
         "screen": {"width": 800, "height": 480, "touch": True},
         "recommendedBrowser": "chromium --kiosk http://localhost:8765",
         "pi": {"model": "Raspberry Pi 5", "ramGb": 16, "accelerator": "AI HAT+ 26 TOPS"},
+        "security": security_status(),
+    }
+
+
+def security_status() -> dict[str, Any]:
+    return {
+        "pinEnabled": bool(settings.device_pin),
+        "lockTimeoutSeconds": settings.device_lock_timeout_seconds,
+        "localOnlyMode": settings.local_only_mode,
+        "dataStorage": "local-sqlite",
+        "noticeTR": "Hasta verisi bu cihazda lokal olarak saklanır. Klinik kullanımda KVKK ve kurum politikaları doğrultusunda hekim sorumluluğunda yönetilmelidir.",
     }
 
 
