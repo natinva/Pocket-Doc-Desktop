@@ -107,11 +107,7 @@ def get_security_status() -> dict[str, Any]:
 @app.get("/api/security/overview")
 def security_overview() -> dict[str, Any]:
     session_summary = summarize_sessions(store.list(include_archived=True))
-    return {
-        "security": security_status(),
-        "sessions": session_summary,
-        "audit": audit_summary(),
-    }
+    return {"security": security_status(), "sessions": session_summary, "audit": audit_summary()}
 
 
 @app.get("/api/security/audit")
@@ -149,11 +145,7 @@ def create_session(body: SessionCreateRequest) -> dict[str, Any]:
 
 
 @app.get("/api/sessions")
-def list_sessions(
-    query: str | None = None,
-    status: str | None = None,
-    include_archived: bool = False,
-) -> list[dict[str, Any]]:
+def list_sessions(query: str | None = None, status: str | None = None, include_archived: bool = False) -> list[dict[str, Any]]:
     return store.list(query=query, status=status, include_archived=include_archived)
 
 
@@ -194,12 +186,17 @@ def restore_session(session_id: str) -> dict[str, Any]:
 
 
 @app.delete("/api/sessions/{session_id}")
-def delete_session(session_id: str) -> dict[str, bool]:
+def delete_session(session_id: str) -> dict[str, Any]:
+    session = store.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    related_files = _collect_session_file_paths(session)
     deleted = store.delete(session_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Session not found")
-    audit_event("session_deleted", {"session_id": session_id})
-    return {"deleted": True}
+    deleted_files = [str(path) for path in related_files if secure_files.safe_unlink(path)]
+    audit_event("session_deleted", {"session_id": session_id, "fileCount": len(related_files), "deletedFileCount": len(deleted_files)})
+    return {"deleted": True, "deletedFileCount": len(deleted_files), "fileCount": len(related_files)}
 
 
 @app.get("/api/sessions/{session_id}/report-preview")
@@ -218,10 +215,7 @@ def export_report_txt(session_id: str) -> PlainTextResponse:
         raise HTTPException(status_code=404, detail="Session not found")
     audit_event("report_txt_exported", {"session_id": session_id})
     filename = f"pocketdoc-report-{session_id[:8]}.txt"
-    return PlainTextResponse(
-        build_report_preview(session),
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
+    return PlainTextResponse(build_report_preview(session), headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 
 @app.get("/api/sessions/{session_id}/report.html", response_class=HTMLResponse)
@@ -231,10 +225,7 @@ def export_report_html(session_id: str) -> HTMLResponse:
         raise HTTPException(status_code=404, detail="Session not found")
     audit_event("report_html_opened", {"session_id": session_id})
     filename = f"pocketdoc-report-{session_id[:8]}.html"
-    return HTMLResponse(
-        build_report_html(session),
-        headers={"Content-Disposition": f'inline; filename="{filename}"'},
-    )
+    return HTMLResponse(build_report_html(session), headers={"Content-Disposition": f'inline; filename="{filename}"'})
 
 
 @app.post("/api/sessions/{session_id}/transcript")
@@ -272,6 +263,8 @@ async def transcribe_audio(session_id: str, language: str = "tr", file: UploadFi
         session = store.update(session_id, {"transcript": result["transcript"]})
     else:
         session = store.get(session_id)
+    if session:
+        session = store.append(session_id, "audioResults", {"audioPath": str(audio_path), "fileProtected": result["fileProtected"], "language": language, "generatedAt": result.get("generatedAt")})
     audit_event("audio_transcribed", {"session_id": session_id, "language": language, "fileProtected": result["fileProtected"]})
     return {"session": session, "result": result}
 
@@ -318,26 +311,11 @@ async def analyze_image(session_id: str, model_id: str, file: UploadFile = File(
 
 @app.get("/api/kiosk/config")
 def kiosk_config() -> dict[str, Any]:
-    return {
-        "screen": {"width": 800, "height": 480, "touch": True},
-        "recommendedBrowser": "chromium --kiosk http://localhost:8765",
-        "pi": {"model": "Raspberry Pi 5", "ramGb": 16, "accelerator": "AI HAT+ 26 TOPS"},
-        "security": security_status(),
-    }
+    return {"screen": {"width": 800, "height": 480, "touch": True}, "recommendedBrowser": "chromium --kiosk http://localhost:8765", "pi": {"model": "Raspberry Pi 5", "ramGb": 16, "accelerator": "AI HAT+ 26 TOPS"}, "security": security_status()}
 
 
 def security_status() -> dict[str, Any]:
-    return {
-        "pinEnabled": pin_is_enabled(),
-        "pinStorageMode": pin_storage_mode(),
-        "lockTimeoutSeconds": settings.device_lock_timeout_seconds,
-        "accessTokenTtlSeconds": settings.access_token_ttl_seconds,
-        "localOnlyMode": settings.local_only_mode,
-        "auditLogEnabled": settings.audit_log_enabled,
-        "fileProtection": secure_files.status(),
-        "dataStorage": "local-sqlite",
-        "noticeTR": "Hasta verisi bu cihazda lokal olarak saklanır. Klinik kullanımda KVKK ve kurum politikaları doğrultusunda hekim sorumluluğunda yönetilmelidir.",
-    }
+    return {"pinEnabled": pin_is_enabled(), "pinStorageMode": pin_storage_mode(), "lockTimeoutSeconds": settings.device_lock_timeout_seconds, "accessTokenTtlSeconds": settings.access_token_ttl_seconds, "localOnlyMode": settings.local_only_mode, "auditLogEnabled": settings.audit_log_enabled, "fileProtection": secure_files.status(), "dataStorage": "local-sqlite", "noticeTR": "Hasta verisi bu cihazda lokal olarak saklanır. Klinik kullanımda KVKK ve kurum politikaları doğrultusunda hekim sorumluluğunda yönetilmelidir."}
 
 
 def summarize_sessions(sessions: list[dict[str, Any]]) -> dict[str, int]:
@@ -354,97 +332,46 @@ def summarize_sessions(sessions: list[dict[str, Any]]) -> dict[str, int]:
     return summary
 
 
+def _collect_session_file_paths(session: dict[str, Any]) -> list[Path]:
+    paths: list[Path] = []
+    for result in session.get("imagingResults") or []:
+        if isinstance(result, dict) and result.get("imagePath"):
+            paths.append(Path(str(result["imagePath"])))
+    for result in session.get("audioResults") or []:
+        if isinstance(result, dict) and result.get("audioPath"):
+            paths.append(Path(str(result["audioPath"])))
+    seen: set[str] = set()
+    unique_paths: list[Path] = []
+    for path in paths:
+        key = str(path)
+        if key not in seen:
+            seen.add(key)
+            unique_paths.append(path)
+    return unique_paths
+
+
 def build_report_preview(session: dict[str, Any]) -> str:
     patient = session.get("patient") or {}
-    patient_line = " / ".join(
-        item
-        for item in [
-            patient.get("displayName") or "Hasta adı belirtilmedi",
-            patient.get("age") or "Yaş belirtilmedi",
-            patient.get("sex") or "Cinsiyet belirtilmedi",
-            patient.get("chiefComplaint") or "Ana şikayet belirtilmedi",
-        ]
-        if item
-    )
+    patient_line = " / ".join(item for item in [patient.get("displayName") or "Hasta adı belirtilmedi", patient.get("age") or "Yaş belirtilmedi", patient.get("sex") or "Cinsiyet belirtilmedi", patient.get("chiefComplaint") or "Ana şikayet belirtilmedi"] if item)
     tool_count = len(session.get("clinicalToolResults") or [])
     imaging_count = len(session.get("imagingResults") or [])
+    audio_count = len(session.get("audioResults") or [])
     finalized = "Evet" if session.get("finalized") else "Hayır"
     archived = "Evet" if session.get("archived") else "Hayır"
     warnings = session.get("warnings") or []
     warning_text = "\n".join(f"- {warning}" for warning in warnings) or "Uyarı girilmedi."
-    return (
-        "POCKET DOC - KLİNİK GÖRÜŞME TASLAĞI\n\n"
-        f"Hasta: {patient_line}\n"
-        f"Oturum: {session.get('id')}\n"
-        f"Final onay: {finalized}\n"
-        f"Arşiv: {archived}\n\n"
-        "AI / Klinik Özet:\n"
-        f"{session.get('summary') or 'Henüz özet oluşturulmadı.'}\n\n"
-        "Hekim Notu:\n"
-        f"{session.get('doctorNotes') or 'Henüz hekim notu girilmedi.'}\n\n"
-        "Uyarılar / Red Flag Notları:\n"
-        f"{warning_text}\n\n"
-        f"Klinik araç sonucu: {tool_count}\n"
-        f"Görüntü analizi sonucu: {imaging_count}\n\n"
-        "Not: Bu çıktı hekim tarafından kontrol edilmeden hasta raporu olarak kullanılmamalıdır."
-    )
+    return ("POCKET DOC - KLİNİK GÖRÜŞME TASLAĞI\n\n" f"Hasta: {patient_line}\n" f"Oturum: {session.get('id')}\n" f"Final onay: {finalized}\n" f"Arşiv: {archived}\n\n" "AI / Klinik Özet:\n" f"{session.get('summary') or 'Henüz özet oluşturulmadı.'}\n\n" "Hekim Notu:\n" f"{session.get('doctorNotes') or 'Henüz hekim notu girilmedi.'}\n\n" "Uyarılar / Red Flag Notları:\n" f"{warning_text}\n\n" f"Klinik araç sonucu: {tool_count}\n" f"Görüntü analizi sonucu: {imaging_count}\n" f"Ses kaydı sonucu: {audio_count}\n\n" "Not: Bu çıktı hekim tarafından kontrol edilmeden hasta raporu olarak kullanılmamalıdır.")
 
 
 def build_report_html(session: dict[str, Any]) -> str:
     patient = session.get("patient") or {}
     patient_name = patient.get("displayName") or "Hasta adı belirtilmedi"
-    patient_items = [
-        ("Yaş", patient.get("age") or "Belirtilmedi"),
-        ("Cinsiyet", patient.get("sex") or "Belirtilmedi"),
-        ("Ana şikayet", patient.get("chiefComplaint") or "Belirtilmedi"),
-        ("Oturum", session.get("id") or "-"),
-        ("Final onay", "Evet" if session.get("finalized") else "Hayır"),
-        ("Arşiv", "Evet" if session.get("archived") else "Hayır"),
-    ]
+    patient_items = [("Yaş", patient.get("age") or "Belirtilmedi"), ("Cinsiyet", patient.get("sex") or "Belirtilmedi"), ("Ana şikayet", patient.get("chiefComplaint") or "Belirtilmedi"), ("Oturum", session.get("id") or "-"), ("Final onay", "Evet" if session.get("finalized") else "Hayır"), ("Arşiv", "Evet" if session.get("archived") else "Hayır")]
     warnings = session.get("warnings") or []
     warning_html = "".join(f"<li>{escape(str(warning))}</li>" for warning in warnings) or "<li>Uyarı girilmedi.</li>"
     clinical_tools = session.get("clinicalToolResults") or []
     imaging_results = session.get("imagingResults") or []
+    audio_results = session.get("audioResults") or []
     return f"""<!doctype html>
-<html lang="tr">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Pocket Doc Klinik Görüşme Taslağı</title>
-  <style>
-    body {{ font-family: Arial, Helvetica, sans-serif; margin: 32px; color: #17211b; background: #ffffff; }}
-    .report {{ max-width: 840px; margin: 0 auto; }}
-    h1 {{ color: #0f766e; margin-bottom: 4px; }}
-    h2 {{ color: #17211b; border-bottom: 1px solid #d9ded6; padding-bottom: 6px; margin-top: 24px; }}
-    .muted {{ color: #647067; }}
-    .grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }}
-    .box {{ border: 1px solid #d9ded6; border-radius: 8px; padding: 12px; background: #fbfcfa; white-space: pre-wrap; }}
-    .meta {{ border: 1px solid #d9ded6; border-radius: 8px; padding: 10px; }}
-    .label {{ color: #647067; font-size: 12px; display: block; margin-bottom: 4px; }}
-    .warning {{ border-left: 4px solid #b7791f; padding-left: 12px; }}
-    @media print {{ body {{ margin: 16mm; }} .no-print {{ display: none; }} }}
-  </style>
-</head>
-<body>
-  <main class="report">
-    <button class="no-print" onclick="window.print()">Yazdır / PDF Kaydet</button>
-    <h1>Pocket Doc Klinik Görüşme Taslağı</h1>
-    <p class="muted">Bu çıktı hekim tarafından kontrol edilmeden hasta raporu olarak kullanılmamalıdır.</p>
-    <h2>{escape(str(patient_name))}</h2>
-    <section class="grid">
-      {''.join(f'<div class="meta"><span class="label">{escape(label)}</span>{escape(str(value))}</div>' for label, value in patient_items)}
-    </section>
-    <h2>AI / Klinik Özet</h2>
-    <section class="box">{escape(session.get('summary') or 'Henüz özet oluşturulmadı.')}</section>
-    <h2>Hekim Notu</h2>
-    <section class="box">{escape(session.get('doctorNotes') or 'Henüz hekim notu girilmedi.')}</section>
-    <h2>Uyarılar / Red Flag Notları</h2>
-    <section class="box warning"><ul>{warning_html}</ul></section>
-    <h2>Ek Sonuçlar</h2>
-    <section class="grid">
-      <div class="meta"><span class="label">Klinik araç sonucu</span>{len(clinical_tools)}</div>
-      <div class="meta"><span class="label">Görüntü analizi sonucu</span>{len(imaging_results)}</div>
-    </section>
-  </main>
-</body>
-</html>"""
+<html lang="tr"><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>Pocket Doc Klinik Görüşme Taslağı</title><style>body{{font-family:Arial,Helvetica,sans-serif;margin:32px;color:#17211b;background:#fff}}.report{{max-width:840px;margin:0 auto}}h1{{color:#0f766e;margin-bottom:4px}}h2{{color:#17211b;border-bottom:1px solid #d9ded6;padding-bottom:6px;margin-top:24px}}.muted{{color:#647067}}.grid{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}}.box{{border:1px solid #d9ded6;border-radius:8px;padding:12px;background:#fbfcfa;white-space:pre-wrap}}.meta{{border:1px solid #d9ded6;border-radius:8px;padding:10px}}.label{{color:#647067;font-size:12px;display:block;margin-bottom:4px}}.warning{{border-left:4px solid #b7791f;padding-left:12px}}@media print{{body{{margin:16mm}}.no-print{{display:none}}}}</style></head>
+<body><main class="report"><button class="no-print" onclick="window.print()">Yazdır / PDF Kaydet</button><h1>Pocket Doc Klinik Görüşme Taslağı</h1><p class="muted">Bu çıktı hekim tarafından kontrol edilmeden hasta raporu olarak kullanılmamalıdır.</p><h2>{escape(str(patient_name))}</h2><section class="grid">{''.join(f'<div class="meta"><span class="label">{escape(label)}</span>{escape(str(value))}</div>' for label, value in patient_items)}</section><h2>AI / Klinik Özet</h2><section class="box">{escape(session.get('summary') or 'Henüz özet oluşturulmadı.')}</section><h2>Hekim Notu</h2><section class="box">{escape(session.get('doctorNotes') or 'Henüz hekim notu girilmedi.')}</section><h2>Uyarılar / Red Flag Notları</h2><section class="box warning"><ul>{warning_html}</ul></section><h2>Ek Sonuçlar</h2><section class="grid"><div class="meta"><span class="label">Klinik araç sonucu</span>{len(clinical_tools)}</div><div class="meta"><span class="label">Görüntü analizi sonucu</span>{len(imaging_results)}</div><div class="meta"><span class="label">Ses kaydı sonucu</span>{len(audio_results)}</div></section></main></body></html>"""
