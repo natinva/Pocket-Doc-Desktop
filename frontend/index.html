@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pocket Doc Desktop</title>
+  <style>
+    body{margin:0;font-family:Arial,sans-serif;background:#e6f2ff;color:#0f263d;overflow:hidden}
+    .app{width:800px;height:480px;max-width:100vw;max-height:100vh;margin:0 auto;padding:20px;box-sizing:border-box;display:grid;grid-template-rows:auto 1fr auto;gap:14px}
+    header{display:flex;justify-content:space-between;align-items:center}
+    h1{margin:0;color:#003366;font-size:30px}.sub{color:#5b7085;font-size:14px;margin-top:4px}
+    .status{background:white;border:1px solid #d7e6f5;border-radius:16px;padding:10px 14px;color:#003366}
+    main{display:grid;grid-template-columns:1fr 1fr;gap:14px;min-height:0}.panel{background:white;border:1px solid #d7e6f5;border-radius:24px;padding:16px;box-shadow:0 14px 32px rgba(0,51,102,.08)}
+    button{width:100%;min-height:70px;margin-bottom:12px;border:0;border-radius:18px;background:#003366;color:white;font-size:18px;font-weight:700;text-align:left;padding:14px;cursor:pointer}
+    button.light{background:#e6f2ff;color:#003366;border:1px solid #d7e6f5}.hint{display:block;font-size:12px;font-weight:400;margin-top:5px;opacity:.8}
+    textarea{width:100%;height:120px;border:1px solid #d7e6f5;border-radius:16px;padding:10px;resize:none;box-sizing:border-box}.out{height:88px;overflow:auto;background:#f8fbff;border:1px solid #d7e6f5;border-radius:16px;padding:10px;font-size:13px;white-space:pre-wrap}
+    footer{font-size:12px;color:#5b7085;display:flex;justify-content:space-between}
+  </style>
+</head>
+<body>
+<div class="app">
+<header><div><h1>Pocket Doc</h1><div class="sub">Dokunmatik klinik asistan cihazı</div></div><div class="status" id="status">Kontrol ediliyor</div></header>
+<main>
+<section class="panel">
+<button id="newSession">Hasta Görüşmesi Başlat<span class="hint">Transkript ve özet akışı</span></button>
+<button class="light" id="tools">Klinik Araçlar<span class="hint">MVP araç listesini göster</span></button>
+<button class="light" id="models">AI Modelleri<span class="hint">Model registry listesini göster</span></button>
+</section>
+<section class="panel">
+<strong id="session">Aktif oturum yok</strong><br><br>
+<textarea id="text" placeholder="Görüşme notunu yazın"></textarea><br><br>
+<div class="out" id="out">Çıktı burada görünecek.</div><br>
+<button id="summary">Özet Oluştur</button>
+</section>
+</main>
+<footer><span>800x480 kiosk MVP</span><span>Son karar hekimindir.</span></footer>
+</div>
+<script>
+let sid=null;const out=document.getElementById('out');
+async function api(p,o={}){const r=await fetch(p,{headers:{'Content-Type':'application/json'},...o});if(!r.ok)throw new Error(await r.text());return r.json()}
+api('/api/health').then(()=>status.textContent='Backend hazır').catch(()=>status.textContent='Backend yok');
+newSession.onclick=async()=>{const s=await api('/api/sessions',{method:'POST',body:JSON.stringify({patient:{source:'kiosk'}})});sid=s.id;session.textContent='Aktif oturum: '+sid.slice(0,8);out.textContent='Yeni oturum oluşturuldu.'}
+summary.onclick=async()=>{if(!sid){out.textContent='Önce oturum başlatın.';return}await api('/api/sessions/'+sid+'/transcript',{method:'POST',body:JSON.stringify({transcript:text.value})});const r=await api('/api/sessions/'+sid+'/summary',{method:'POST',body:JSON.stringify({language:'tr'})});out.textContent=r.result.summary}
+tools.onclick=async()=>{const t=await api('/api/clinical-tools');out.textContent=t.map(x=>x.titleTR+' - '+x.id).join('\n')}
+models.onclick=async()=>{const m=await api('/api/models');out.textContent=m.map(x=>x.titleTR+' - '+x.status).join('\n')}
+</script>
+</body>
+</html>
