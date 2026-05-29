@@ -34,6 +34,8 @@ class Settings:
     database_path: Path = _path_from_env("POCKETDOC_DATABASE_PATH", PROJECT_ROOT / "data" / "pocketdoc.sqlite3")
     audit_log_path: Path = _path_from_env("POCKETDOC_AUDIT_LOG_PATH", PROJECT_ROOT / "data" / "audit.log")
     device_pin: str | None = os.getenv("POCKETDOC_DEVICE_PIN") or None
+    device_pin_hash: str | None = os.getenv("POCKETDOC_DEVICE_PIN_HASH") or None
+    pin_hash_iterations: int = int(os.getenv("POCKETDOC_PIN_HASH_ITERATIONS", "390000"))
     device_lock_timeout_seconds: int = int(os.getenv("POCKETDOC_LOCK_TIMEOUT_SECONDS", "900"))
     access_token_ttl_seconds: int = int(os.getenv("POCKETDOC_ACCESS_TOKEN_TTL_SECONDS", "3600"))
     local_only_mode: bool = os.getenv("POCKETDOC_LOCAL_ONLY_MODE", "true").lower() in {"1", "true", "yes", "on"}
