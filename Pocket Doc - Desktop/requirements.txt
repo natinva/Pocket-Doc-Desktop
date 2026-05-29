@@ -4,6 +4,7 @@ python-multipart>=0.0.9
 pydantic>=2.8
 Pillow>=10.4
 openai>=1.40
+cryptography>=42.0
 
 # Enable later on the Pi or development machine when real imaging/audio is wired.
 # opencv-python
