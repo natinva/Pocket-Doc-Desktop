@@ -21,7 +21,7 @@ from .session_store import SessionStore
 
 
 FRONTEND_DIR = PROJECT_ROOT / "frontend"
-PROTECTED_PREFIXES = ("/api/sessions",)
+PROTECTED_PREFIXES = ("/api/sessions", "/api/security/overview", "/api/security/audit")
 
 app = FastAPI(title="Pocket Doc - Desktop", version="0.1.0")
 store = SessionStore()
