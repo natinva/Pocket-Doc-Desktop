@@ -193,6 +193,8 @@ function renderVoice() {
         <div class="actions">
           <button class="secondary-btn" id="saveClinicalBtn">Hekim Notunu Kaydet</button>
           <button class="primary-btn" id="reportPreviewBtn">Rapor Önizle</button>
+          <button class="secondary-btn" id="openHtmlReportBtn">HTML Raporu Aç</button>
+          <button class="secondary-btn" id="downloadTxtReportBtn">TXT İndir</button>
           <button class="danger-btn" id="finalizeBtn">${state.session?.finalized ? "Finali Geri Al" : "Final Onayla"}</button>
         </div>
         <div class="result report-result">${escapeHtml(state.reportPreview || "Rapor önizleme henüz oluşturulmadı.")}</div>
@@ -206,6 +208,8 @@ function renderVoice() {
   document.querySelector("#summaryBtn").onclick = summarizeTranscript;
   document.querySelector("#saveClinicalBtn").onclick = saveClinicalNotes;
   document.querySelector("#reportPreviewBtn").onclick = loadReportPreview;
+  document.querySelector("#openHtmlReportBtn").onclick = openHtmlReport;
+  document.querySelector("#downloadTxtReportBtn").onclick = downloadTxtReport;
   document.querySelector("#finalizeBtn").onclick = toggleFinalize;
 }
 
@@ -256,6 +260,18 @@ async function loadReportPreview(announce = true) {
   state.reportPreview = payload.report;
   if (announce) updateStatus("rapor önizleme hazır");
   renderVoice();
+}
+
+async function openHtmlReport() {
+  await saveClinicalNotes();
+  window.open(`/api/sessions/${state.session.id}/report.html`, "_blank", "noopener,noreferrer");
+  updateStatus("HTML rapor açıldı");
+}
+
+async function downloadTxtReport() {
+  await saveClinicalNotes();
+  window.location.href = `/api/sessions/${state.session.id}/report.txt`;
+  updateStatus("TXT rapor indiriliyor");
 }
 
 async function startRecording() {
