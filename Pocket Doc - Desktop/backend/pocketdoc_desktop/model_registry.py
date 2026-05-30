@@ -6,6 +6,13 @@ from typing import Any
 from .config import settings
 
 
+TASK_CLASSIFICATION = "classification"
+TASK_DETECTION = "detection"
+TASK_SEGMENTATION = "segmentation"
+TASK_KEYPOINT = "keypoint"
+TASK_UNKNOWN = "unknown"
+
+
 def _p(*parts: str) -> str:
     return str(settings.model_base_dir.joinpath(*parts))
 
@@ -35,9 +42,9 @@ MODEL_REGISTRY: dict[str, list[dict[str, Any]]] = {
         {"name": "Bone CA Detector", "id": "bone_ca", "path": _p("Orthopaedics and Traumatology", "Bone CA", "BoneCA.pt"), "modality": "X-ray / CT"},
         {"name": "Bone-K-wire Cast Detector", "id": "bone_kwire", "path": _p("Orthopaedics and Traumatology", "Bone-Kwire-Cast", "BoneKwire.pt"), "modality": "X-ray"},
         {"name": "Canal Stenosis - Lumbar Sagittal MRI", "id": "canal_stenosis", "path": _p("Orthopaedics and Traumatology", "Canal Stenosis - Lumbar MRI Saggital", "canalstenosis.pt"), "modality": "Lumbar sagittal MRI"},
-        {"name": "Canal Stenosis - Lumbar Sagittal MRI (ONNX)", "id": "canal_stenosis_onnx", "path": _p("Orthopaedics and Traumatology", "Canal Stenosis - Lumbar MRI Saggital", "canalstenosis.onnx"), "modality": "Lumbar sagittal MRI"},
+        {"name": "Canal Stenosis - Lumbar Sagittal MRI (ONNX)", "id": "canal_stenosis_onnx", "path": _p("Orthopaedics and Traumatology", "Canal Stenosis - Lumbar MRI Saggital", "canalstenosis.onnx"), "modality": "Lumbar sagittal MRI", "requiresCustomParser": True},
         {"name": "General Fracture Detector - X-Ray", "id": "fracture_general", "path": _p("Orthopaedics and Traumatology", "Fracture - Xray, General", "fracture.pt"), "modality": "X-ray"},
-        {"name": "Gonarthrosis - Kellgren-Lawrence", "id": "knee_oa", "path": _p("Orthopaedics and Traumatology", "Gonarthrosis - Kelgreen Lawrance", "knee.pt"), "modality": "Knee X-ray"},
+        {"name": "Gonarthrosis - Kellgren-Lawrence", "id": "knee_oa", "path": _p("Orthopaedics and Traumatology", "Gonarthrosis - Kelgreen Lawrance", "knee.pt"), "modality": "Knee X-ray", "taskType": TASK_CLASSIFICATION, "outputTypes": ["classifications"]},
         {"name": "Hand Bones - AP X-Ray", "id": "hand_bones", "path": _p("Orthopaedics and Traumatology", "Hand Bones - AP Xray", "HandBones.pt"), "modality": "Hand AP X-ray"},
         {"name": "Hand Fractures Detector", "id": "hand_fractures", "path": _p("Orthopaedics and Traumatology", "Hand Fractures", "Hand Fractures.pt"), "modality": "Hand X-ray"},
         {"name": "Hernia - Lumbar Sagittal MRI", "id": "hernia", "path": _p("Orthopaedics and Traumatology", "Hernia - Lumbar Saggital MRI", "hernia.pt"), "modality": "Lumbar sagittal MRI"},
@@ -45,11 +52,11 @@ MODEL_REGISTRY: dict[str, list[dict[str, Any]]] = {
         {"name": "Proximal Femoral - Pelvis AP", "id": "prox_femur", "path": _p("Orthopaedics and Traumatology", "Proximal Femoral Area - Pelvis AP", "Proximal Femoral Fractures.pt"), "modality": "Pelvis AP X-ray"},
         {"name": "Rotator Cuff Tear Detection - Shoulder MRI", "id": "rotator_cuff_tear", "path": _p("Orthopaedics and Traumatology", "Rotator Cuff Tear - MRI", "RotatorCuff.pt"), "modality": "Shoulder MRI"},
         {"name": "Scoliosis - Basic Vertebrae", "id": "scoliosis_basic", "path": _p("Orthopaedics and Traumatology", "Scoliosis", "Basic Vertebrae", "Basic Vertebrae.pt"), "modality": "Spine X-ray"},
-        {"name": "Scoliosis Keypoints", "id": "scoliosis_keypoints", "path": _p("Orthopaedics and Traumatology", "Scoliosis", "Scoliosis Keypoints", "ScoliosisKeypoints.pt"), "modality": "Spine X-ray"},
-        {"name": "Scoliosis - Back Pose", "id": "scoliosis_backpose", "path": _p("Orthopaedics and Traumatology", "Scoliosis - Back Pose", "BackPose.pt"), "modality": "Back photo"},
+        {"name": "Scoliosis Keypoints", "id": "scoliosis_keypoints", "path": _p("Orthopaedics and Traumatology", "Scoliosis", "Scoliosis Keypoints", "ScoliosisKeypoints.pt"), "modality": "Spine X-ray", "taskType": TASK_KEYPOINT, "outputTypes": ["keypoints"]},
+        {"name": "Scoliosis - Back Pose", "id": "scoliosis_backpose", "path": _p("Orthopaedics and Traumatology", "Scoliosis - Back Pose", "BackPose.pt"), "modality": "Back photo", "taskType": TASK_KEYPOINT, "outputTypes": ["keypoints"]},
         {"name": "Shoulder Anatomy - AP X-Ray", "id": "shoulder", "path": _p("Orthopaedics and Traumatology", "Shoulder Anatomy - AP Xray", "Shoulder.pt"), "modality": "Shoulder AP X-ray"},
         {"name": "Subchondral Sclerosis - Coronal Knee MRI", "id": "subchondral_sclerosis", "path": _p("Orthopaedics and Traumatology", "Subcondral Sclerosis - Coronal Knee MRI", "Subcondral Sclerosis.pt"), "modality": "Coronal knee MRI"},
-        {"name": "Supracondylar Humerus - AP X-Ray", "id": "supracondylar", "path": _p("Orthopaedics and Traumatology", "Supracondylar Humerus - AP Xray", "k-teli.pt"), "modality": "Elbow AP X-ray"},
+        {"name": "Supracondylar Humerus - AP X-Ray", "id": "supracondylar", "path": _p("Orthopaedics and Traumatology", "Supracondylar Humerus - AP Xray", "k-teli.pt"), "modality": "Elbow AP X-ray", "taskType": TASK_SEGMENTATION, "outputTypes": ["masks", "detections"], "postprocess": "supracondylar_pin_geometry"},
         {"name": "Tibia Fractures Detector", "id": "tibia_fractures", "path": _p("Orthopaedics and Traumatology", "Tibia Fractures", "Tibia Fractures.pt"), "modality": "Tibia X-ray"},
         {"name": "Ulna Fracture - Detailed", "id": "ulna_detailed", "path": _p("Orthopaedics and Traumatology", "Ulna Fracture - Xray", "Detailed", "UlnaFractures.pt"), "modality": "Ulna X-ray"},
         {"name": "Ulna Fracture - Simple", "id": "ulna_simple", "path": _p("Orthopaedics and Traumatology", "Ulna Fracture - Xray", "Simple", "UlnaFracture.pt"), "modality": "Ulna X-ray"},
@@ -71,8 +78,7 @@ def flatten_models() -> list[dict[str, Any]]:
     models: list[dict[str, Any]] = []
     for domain, items in MODEL_REGISTRY.items():
         for item in items:
-            path = Path(item["path"])
-            models.append({**item, "domain": domain, "exists": path.exists(), "extension": path.suffix.lower()})
+            models.append(_enrich_model(domain, item))
     return models
 
 
@@ -85,9 +91,102 @@ def find_model(model_id: str) -> dict[str, Any] | None:
 
 def registry_summary() -> dict[str, Any]:
     models = flatten_models()
+    task_counts: dict[str, int] = {}
+    output_counts: dict[str, int] = {}
+    for model in models:
+        task_counts[model["taskType"]] = task_counts.get(model["taskType"], 0) + 1
+        for output_type in model.get("outputTypes", []):
+            output_counts[output_type] = output_counts.get(output_type, 0) + 1
     return {
         "domains": list(MODEL_REGISTRY.keys()),
         "totalModels": len(models),
         "availableModels": sum(1 for model in models if model["exists"]),
         "missingModels": [model for model in models if not model["exists"]],
+        "taskCounts": task_counts,
+        "outputCounts": output_counts,
     }
+
+
+def _enrich_model(domain: str, item: dict[str, Any]) -> dict[str, Any]:
+    path = Path(item["path"])
+    task_type = item.get("taskType") or _infer_task_type(item)
+    output_types = item.get("outputTypes") or _output_types_for_task(task_type)
+    return {
+        **item,
+        "domain": domain,
+        "exists": path.exists(),
+        "extension": path.suffix.lower(),
+        "taskType": task_type,
+        "outputTypes": output_types,
+        "requiresCustomParser": bool(item.get("requiresCustomParser") or path.suffix.lower() == ".onnx"),
+        "postprocess": item.get("postprocess") or _infer_postprocess(item),
+        "clinicalUseTR": item.get("clinicalUseTR") or _clinical_use_text(domain, item, task_type),
+        "inputRequirementsTR": item.get("inputRequirementsTR") or _input_requirements(item),
+        "safetyNoteTR": item.get("safetyNoteTR") or _safety_note(domain, item),
+    }
+
+
+def _infer_task_type(item: dict[str, Any]) -> str:
+    text = f"{item.get('id', '')} {item.get('name', '')} {item.get('modality', '')}".lower()
+    if "keypoint" in text or "pose" in text:
+        return TASK_KEYPOINT
+    if any(token in text for token in ["section", "anatomy", "bones", "vertebrae", "supracondylar"]):
+        return TASK_SEGMENTATION
+    if any(token in text for token in ["gonarthrosis", "kellgren", "classification", "grade"]):
+        return TASK_CLASSIFICATION
+    if any(token in text for token in ["detector", "detection", "fracture", "patholog", "tumor", "pneumonia", "kwire", "instrument"]):
+        return TASK_DETECTION
+    return TASK_DETECTION
+
+
+def _output_types_for_task(task_type: str) -> list[str]:
+    if task_type == TASK_CLASSIFICATION:
+        return ["classifications"]
+    if task_type == TASK_SEGMENTATION:
+        return ["masks", "detections"]
+    if task_type == TASK_KEYPOINT:
+        return ["keypoints"]
+    if task_type == TASK_DETECTION:
+        return ["detections"]
+    return []
+
+
+def _infer_postprocess(item: dict[str, Any]) -> str | None:
+    model_id = str(item.get("id", "")).lower()
+    if model_id == "supracondylar":
+        return "supracondylar_pin_geometry"
+    if "scoliosis" in model_id:
+        return "scoliosis_alignment_measurement"
+    if model_id == "knee_oa":
+        return "kellgren_lawrence_grade_summary"
+    return None
+
+
+def _clinical_use_text(domain: str, item: dict[str, Any], task_type: str) -> str:
+    modality = item.get("modality") or "görüntü"
+    if task_type == TASK_CLASSIFICATION:
+        return f"{modality} üzerinden sınıflama/evreleme desteği sağlar. Tek başına tanı amacıyla kullanılmamalıdır."
+    if task_type == TASK_SEGMENTATION:
+        return f"{modality} üzerinde anatomik veya patolojik alanları işaretleme/segmentasyon desteği sağlar."
+    if task_type == TASK_KEYPOINT:
+        return f"{modality} üzerinde anatomik nokta veya poz işaretleme desteği sağlar. Ölçüm üretimi için postprocess gerekebilir."
+    return f"{modality} üzerinde olası bulgu veya nesne tespiti için karar destek çıktısı sağlar."
+
+
+def _input_requirements(item: dict[str, Any]) -> str:
+    modality = str(item.get("modality") or "görüntü")
+    if "skin" in modality.lower() or "facial" in modality.lower() or "photo" in modality.lower():
+        return "İyi ışıkta, odaklı, mümkünse tek bölgeyi içeren klinik fotoğraf kullanılmalıdır."
+    if "x-ray" in modality.lower() or "xray" in modality.lower():
+        return "Uygun projeksiyonlu, net ve mümkünse kırpılmamış röntgen görüntüsü kullanılmalıdır."
+    if "mri" in modality.lower():
+        return "Modelin eğitildiği düzleme uygun, net MRI kesiti kullanılmalıdır."
+    return "Modelin eğitildiği görüntü tipine uygun, net ve artefaktsız dosya kullanılmalıdır."
+
+
+def _safety_note(domain: str, item: dict[str, Any]) -> str:
+    if domain in {"Dermatology", "Medical Aesthetic"}:
+        return "Işık, açı, makyaj/kremler ve kamera kalitesi sonucu etkileyebilir; hekim değerlendirmesi gerekir."
+    if "X-ray" in str(item.get("modality", "")) or "MRI" in str(item.get("modality", "")):
+        return "Model çıktısı klinik muayene, radyolojik kalite ve uzman hekim yorumu ile birlikte değerlendirilmelidir."
+    return "Bu model tıbbi karar destek amaçlıdır; nihai değerlendirme hekime aittir."
