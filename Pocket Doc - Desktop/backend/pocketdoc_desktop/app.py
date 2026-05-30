@@ -21,7 +21,7 @@ from .session_store import SessionStore
 
 
 FRONTEND_DIR = PROJECT_ROOT / "frontend"
-PROTECTED_PREFIXES = ("/api/sessions", "/api/security/overview", "/api/security/audit")
+PROTECTED_PREFIXES = ("/api/sessions", "/api/security/overview", "/api/security/audit", "/api/security/orphan-files")
 
 app = FastAPI(title="Pocket Doc - Desktop", version="0.1.0")
 store = SessionStore()
@@ -57,6 +57,10 @@ class VerifyPinRequest(BaseModel):
     pin: str = ""
 
 
+class OrphanCleanupRequest(BaseModel):
+    confirm: bool = False
+
+
 if FRONTEND_DIR.exists():
     app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
 
@@ -88,15 +92,7 @@ def index() -> FileResponse:
 
 @app.get("/api/health")
 def health() -> dict[str, Any]:
-    return {
-        "ok": True,
-        "env": settings.env,
-        "inferenceBackend": settings.inference_backend,
-        "patientSumEnabled": patient_sum.enabled,
-        "modelRegistry": registry_summary(),
-        "clinicalTools": clinical_tools_summary(),
-        "security": security_status(),
-    }
+    return {"ok": True, "env": settings.env, "inferenceBackend": settings.inference_backend, "patientSumEnabled": patient_sum.enabled, "modelRegistry": registry_summary(), "clinicalTools": clinical_tools_summary(), "security": security_status()}
 
 
 @app.get("/api/security/status")
@@ -107,12 +103,36 @@ def get_security_status() -> dict[str, Any]:
 @app.get("/api/security/overview")
 def security_overview() -> dict[str, Any]:
     session_summary = summarize_sessions(store.list(include_archived=True))
-    return {"security": security_status(), "sessions": session_summary, "audit": audit_summary()}
+    orphan_summary = scan_orphan_uploads(include_items=False)
+    return {"security": security_status(), "sessions": session_summary, "audit": audit_summary(), "orphanFiles": orphan_summary}
 
 
 @app.get("/api/security/audit")
 def get_audit_events(limit: int = 100) -> dict[str, Any]:
     return {"events": read_audit_events(limit=limit), "summary": audit_summary()}
+
+
+@app.get("/api/security/orphan-files")
+def get_orphan_files() -> dict[str, Any]:
+    result = scan_orphan_uploads(include_items=True)
+    audit_event("orphan_scan", {"orphanCount": result["orphanCount"], "orphanBytes": result["orphanBytes"]})
+    return result
+
+
+@app.post("/api/security/orphan-files/cleanup")
+def cleanup_orphan_files(body: OrphanCleanupRequest) -> dict[str, Any]:
+    if not body.confirm:
+        raise HTTPException(status_code=400, detail="Cleanup requires confirm=true")
+    result = scan_orphan_uploads(include_items=True)
+    deleted = 0
+    deleted_bytes = 0
+    for item in result["items"]:
+        path = Path(item["path"])
+        if secure_files.safe_unlink(path):
+            deleted += 1
+            deleted_bytes += int(item.get("sizeBytes") or 0)
+    audit_event("orphan_cleanup", {"orphanCount": result["orphanCount"], "deletedCount": deleted, "deletedBytes": deleted_bytes})
+    return {"deletedCount": deleted, "deletedBytes": deleted_bytes, "scannedOrphanCount": result["orphanCount"], "scannedOrphanBytes": result["orphanBytes"]}
 
 
 @app.post("/api/security/verify-pin")
@@ -330,6 +350,34 @@ def summarize_sessions(sessions: list[dict[str, Any]]) -> dict[str, int]:
         if not session.get("summary") and not session.get("transcript") and not session.get("finalized"):
             summary["draft"] += 1
     return summary
+
+
+def scan_orphan_uploads(include_items: bool = True) -> dict[str, Any]:
+    referenced = {str(path.resolve()) for session in store.list(include_archived=True) for path in _collect_session_file_paths(session) if _safe_resolve(path)}
+    items: list[dict[str, Any]] = []
+    total_count = 0
+    total_bytes = 0
+    settings.upload_dir.mkdir(parents=True, exist_ok=True)
+    for path in settings.upload_dir.rglob("*"):
+        if not path.is_file():
+            continue
+        resolved = str(path.resolve())
+        if resolved in referenced:
+            continue
+        size = path.stat().st_size
+        total_count += 1
+        total_bytes += size
+        if include_items:
+            items.append({"path": str(path), "sizeBytes": size, "name": path.name})
+    return {"uploadDir": str(settings.upload_dir), "orphanCount": total_count, "orphanBytes": total_bytes, "items": items if include_items else []}
+
+
+def _safe_resolve(path: Path) -> bool:
+    try:
+        path.resolve()
+        return True
+    except OSError:
+        return False
 
 
 def _collect_session_file_paths(session: dict[str, Any]) -> list[Path]:
