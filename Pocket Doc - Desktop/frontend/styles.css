@@ -98,12 +98,21 @@ button, input, select, textarea { font: inherit; }
 .warning { border-left-color: var(--amber); }
 .muted { color: var(--muted); font-size: 12px; }
 .metric-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.imaging-overlay-panel { display: grid; gap: 8px; }
+.imaging-preview-wrap { position: relative; width: min(100%, 840px); min-height: 180px; border: 1px solid var(--line); border-radius: 8px; background: #fbfcfa; overflow: auto; }
+.imaging-preview-wrap img { display: block; max-width: 100%; height: auto; }
+.imaging-preview-wrap img:not([src]) { min-height: 180px; }
+.imaging-preview-wrap canvas { position: absolute; left: 0; top: 0; pointer-events: none; }
+#imagingDetectionList { max-height: 260px; }
+#imagingDetectionList h3 { margin: 8px 0 4px; font-size: 14px; }
+#imagingDetectionList ol, #imagingDetectionList ul { margin: 4px 0 0 18px; padding: 0; }
 .hidden { display: none; }
 @media (max-width: 700px) {
   .split, .field-grid, .choice-grid, .patientsum-screen, .patient-grid, .session-list, .session-filters { grid-template-columns: 1fr; }
   .choice-card { min-height: 132px; }
   .field textarea { min-height: 112px; }
   .security-strip { justify-content: flex-start; flex-wrap: wrap; }
+  .imaging-preview-wrap { min-height: 140px; }
 }
 @media (max-height: 520px) {
   .choice-card { min-height: 126px; }
