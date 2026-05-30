@@ -4,7 +4,7 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -92,7 +92,7 @@ def index() -> FileResponse:
 
 @app.get("/api/health")
 def health() -> dict[str, Any]:
-    return {"ok": True, "env": settings.env, "inferenceBackend": settings.inference_backend, "patientSumEnabled": patient_sum.enabled, "modelRegistry": registry_summary(), "clinicalTools": clinical_tools_summary(), "security": security_status()}
+    return {"ok": True, "env": settings.env, "inferenceBackend": settings.inference_backend, "patientSumEnabled": patient_sum.enabled, "modelRegistry": registry_summary(), "clinicalTools": clinical_tools_summary(), "security": security_status(), "demoInferenceDefaults": demo_inference_defaults()}
 
 
 @app.get("/api/security/status")
@@ -315,17 +315,26 @@ def list_models() -> list[dict[str, Any]]:
 
 
 @app.post("/api/sessions/{session_id}/imaging/{model_id}")
-async def analyze_image(session_id: str, model_id: str, file: UploadFile = File(...)) -> dict[str, Any]:
+async def analyze_image(
+    session_id: str,
+    model_id: str,
+    file: UploadFile = File(...),
+    conf: float = Form(settings.demo_conf_threshold),
+    iou: float = Form(settings.demo_iou_threshold),
+    imgsz: int = Form(settings.demo_imgsz),
+    max_det: int = Form(settings.demo_max_det),
+) -> dict[str, Any]:
     if not store.get(session_id):
         raise HTTPException(status_code=404, detail="Session not found")
     content = await file.read()
     image_path = imaging.save_upload(content, file.filename or "image")
+    options = {"conf": conf, "iou": iou, "imgsz": imgsz, "max_det": max_det}
     try:
-        result = imaging.analyze(model_id, image_path)
+        result = imaging.analyze(model_id, image_path, options=options)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     session = store.append(session_id, "imagingResults", result)
-    audit_event("imaging_analyzed", {"session_id": session_id, "model_id": model_id, "fileProtected": result.get("fileProtected")})
+    audit_event("imaging_analyzed", {"session_id": session_id, "model_id": model_id, "fileProtected": result.get("fileProtected"), "options": result.get("inferenceOptions")})
     return {"session": session, "result": result}
 
 
@@ -336,6 +345,10 @@ def kiosk_config() -> dict[str, Any]:
 
 def security_status() -> dict[str, Any]:
     return {"pinEnabled": pin_is_enabled(), "pinStorageMode": pin_storage_mode(), "lockTimeoutSeconds": settings.device_lock_timeout_seconds, "accessTokenTtlSeconds": settings.access_token_ttl_seconds, "localOnlyMode": settings.local_only_mode, "auditLogEnabled": settings.audit_log_enabled, "fileProtection": secure_files.status(), "dataStorage": "local-sqlite", "noticeTR": "Hasta verisi bu cihazda lokal olarak saklanır. Klinik kullanımda KVKK ve kurum politikaları doğrultusunda hekim sorumluluğunda yönetilmelidir."}
+
+
+def demo_inference_defaults() -> dict[str, Any]:
+    return {"conf": settings.demo_conf_threshold, "iou": settings.demo_iou_threshold, "imgsz": settings.demo_imgsz, "max_det": settings.demo_max_det}
 
 
 def summarize_sessions(sessions: list[dict[str, Any]]) -> dict[str, int]:
