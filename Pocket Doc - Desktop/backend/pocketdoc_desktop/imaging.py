@@ -33,6 +33,10 @@ class ImagingService:
         result["source"] = source
         result["imagePath"] = str(image_path)
         result["fileProtected"] = secure_files.active and image_path.suffix == ".pdoc"
+        result.setdefault("detections", [])
+        result.setdefault("classifications", [])
+        result.setdefault("masks", [])
+        result.setdefault("keypoints", [])
         result.setdefault("warningsTR", [])
         if result["fileProtected"]:
             result["warningsTR"].append("Yüklenen dosya disk üzerinde korumalı formatta saklandı.")
@@ -55,6 +59,8 @@ class ImagingService:
             "resultSummaryTR": "Inference adapter çalıştırılamadı; güvenli fallback sonucu üretildi.",
             "detections": [],
             "classifications": [],
+            "masks": [],
+            "keypoints": [],
             "warningsTR": [
                 "Model çıktısı üretilemedi.",
                 f"Backend: {self.backend}",
