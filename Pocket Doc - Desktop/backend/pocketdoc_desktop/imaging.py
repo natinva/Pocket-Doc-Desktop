@@ -7,6 +7,7 @@ from uuid import uuid4
 from .config import settings
 from .inference_adapters import get_adapter
 from .model_registry import find_model
+from .postprocess import run_postprocess
 from .secure_files import secure_files
 from .session_store import utc_now_iso
 
@@ -40,6 +41,11 @@ class ImagingService:
         result.setdefault("warningsTR", [])
         if result["fileProtected"]:
             result["warningsTR"].append("Yüklenen dosya disk üzerinde korumalı formatta saklandı.")
+        postprocess_result = run_postprocess(model, result)
+        if postprocess_result:
+            result["postprocessResult"] = postprocess_result
+            if postprocess_result.get("summaryTR"):
+                result["warningsTR"].append(f"Postprocess: {postprocess_result['summaryTR']}")
         return result
 
     def _fallback_result(self, model: dict[str, Any], image_path: Path, error: Exception) -> dict[str, Any]:
