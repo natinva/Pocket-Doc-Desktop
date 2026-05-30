@@ -21,6 +21,27 @@ exports/
 *.sqlite
 *.sqlite3
 
+# Large AI model artifacts
+*.pt
+*.onnx
+*.pth
+*.engine
+*.hef
+*.tflite
+*.mlmodel
+*.safetensors
+Modeller/
+models/
+Pocket Doc - Desktop/Modeller/
+Pocket Doc - Desktop/models/
+!Pocket Doc - Desktop/models.example/
+!Pocket Doc - Desktop/models.example/**
+
+# Generated reports / temporary files
+reports/
+*.pdf
+*.tmp
+
 # OS / IDE
 .DS_Store
 .vscode/
