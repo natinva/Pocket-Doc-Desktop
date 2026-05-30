@@ -24,7 +24,7 @@ function ensureImagingOverlay() {
     panel.id = "imagingOverlayPanel";
     panel.innerHTML = `
       <h2>Görüntü Önizleme ve Tespitler</h2>
-      <p class="muted">Bounding box sonuçları seçilen lokal görüntünün üzerine çizilir. Eski oturumlarda ham görüntü tarayıcıda olmadığı için sadece metin sonucu gösterilebilir.</p>
+      <p class="muted">BBox, segmentasyon polygon ve keypoint sonuçları seçilen lokal görüntünün üzerine çizilir. Eski oturumlarda ham görüntü tarayıcıda olmadığı için sadece metin sonucu gösterilebilir.</p>
       <div class="imaging-preview-wrap">
         <img id="imagingPreviewImage" alt="Görüntü önizleme" />
         <canvas id="imagingOverlayCanvas"></canvas>
@@ -54,10 +54,10 @@ function renderImagingOverlay() {
   }
 
   if (image.src !== pocketDocPreviewUrl) {
-    image.onload = () => drawDetections(result);
+    image.onload = () => drawOverlay(result);
     image.src = pocketDocPreviewUrl;
   } else {
-    drawDetections(result);
+    drawOverlay(result);
   }
   list.innerHTML = renderDetectionList(result, true);
 }
@@ -79,20 +79,28 @@ function renderDetectionList(result, hasPreview) {
 
   const detections = result.detections || [];
   const classifications = result.classifications || [];
+  const masks = result.masks || [];
+  const keypoints = result.keypoints || [];
   const warnings = result.warningsTR || [];
   const detectionRows = detections.length
-    ? `<h3>Tespitler</h3><ol>${detections.map((item) => `<li><strong>${escapeHtml(item.label || "bulgu")}</strong> — güven: ${formatConfidence(item.confidence)} — bbox: ${escapeHtml((item.bboxXYXY || []).map((v) => Math.round(Number(v))).join(", "))}</li>`).join("")}</ol>`
-    : "<p>Tespit kutusu yok.</p>";
+    ? `<h3>BBox Tespitleri</h3><ol>${detections.map((item) => `<li><strong>${escapeHtml(item.label || "bulgu")}</strong> — güven: ${formatConfidence(item.confidence)} — bbox: ${escapeHtml((item.bboxXYXY || []).map((v) => Math.round(Number(v))).join(", "))}</li>`).join("")}</ol>`
+    : "<p>BBox tespiti yok.</p>";
+  const maskRows = masks.length
+    ? `<h3>Segmentasyon Maskeleri</h3><ol>${masks.map((item) => `<li><strong>${escapeHtml(item.label || "maske")}</strong> — güven: ${formatConfidence(item.confidence)} — nokta: ${(item.polygonXY || []).length}</li>`).join("")}</ol>`
+    : "";
+  const keypointRows = keypoints.length
+    ? `<h3>Keypoint Grupları</h3><ol>${keypoints.map((item) => `<li><strong>${escapeHtml(item.label || "keypoint")}</strong> — nokta: ${(item.points || []).length}</li>`).join("")}</ol>`
+    : "";
   const classificationRows = classifications.length
     ? `<h3>Sınıflama</h3><ol>${classifications.map((item) => `<li><strong>${escapeHtml(item.label || "sınıf")}</strong> — güven: ${formatConfidence(item.confidence)}</li>`).join("")}</ol>`
     : "";
   const warningRows = warnings.length
     ? `<h3>Uyarılar</h3><ul>${warnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join("")}</ul>`
     : "";
-  return `<p><strong>${escapeHtml(result.modelName || "Model")}</strong>: ${escapeHtml(result.resultSummaryTR || "Sonuç yok.")}</p>${detectionRows}${classificationRows}${warningRows}`;
+  return `<p><strong>${escapeHtml(result.modelName || "Model")}</strong>: ${escapeHtml(result.resultSummaryTR || "Sonuç yok.")}</p>${detectionRows}${maskRows}${keypointRows}${classificationRows}${warningRows}`;
 }
 
-function drawDetections(result) {
+function drawOverlay(result) {
   const image = document.querySelector("#imagingPreviewImage");
   const canvas = document.querySelector("#imagingOverlayCanvas");
   if (!image || !canvas || !image.complete || !image.naturalWidth) return;
@@ -106,14 +114,17 @@ function drawDetections(result) {
   const ctx = canvas.getContext("2d");
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  const detections = result?.detections || [];
-  if (!detections.length) return;
-
   const scaleX = canvas.width / image.naturalWidth;
   const scaleY = canvas.height / image.naturalHeight;
   ctx.lineWidth = 2;
   ctx.font = "13px Arial";
 
+  drawMasks(ctx, result?.masks || [], scaleX, scaleY);
+  drawDetections(ctx, result?.detections || [], scaleX, scaleY);
+  drawKeypoints(ctx, result?.keypoints || [], scaleX, scaleY);
+}
+
+function drawDetections(ctx, detections, scaleX, scaleY) {
   detections.forEach((item, index) => {
     const [x1, y1, x2, y2] = (item.bboxXYXY || []).map(Number);
     if (![x1, y1, x2, y2].every(Number.isFinite)) return;
@@ -123,12 +134,56 @@ function drawDetections(result) {
     const h = Math.max(0, (y2 - y1) * scaleY);
     ctx.strokeRect(x, y, w, h);
     const label = `${index + 1}. ${item.label || "bulgu"} ${formatConfidence(item.confidence)}`;
-    const labelWidth = ctx.measureText(label).width + 8;
-    const labelY = Math.max(18, y);
-    ctx.fillRect(x, labelY - 16, labelWidth, 18);
-    ctx.clearRect(x + 1, labelY - 15, labelWidth - 2, 16);
-    ctx.fillText(label, x + 4, labelY - 3);
+    drawCanvasLabel(ctx, label, x, Math.max(18, y));
   });
+}
+
+function drawMasks(ctx, masks, scaleX, scaleY) {
+  masks.forEach((item, index) => {
+    const points = item.polygonXY || [];
+    if (points.length < 3) return;
+    ctx.beginPath();
+    points.forEach((point, pointIndex) => {
+      const [rawX, rawY] = point.map(Number);
+      if (!Number.isFinite(rawX) || !Number.isFinite(rawY)) return;
+      const x = rawX * scaleX;
+      const y = rawY * scaleY;
+      if (pointIndex === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.closePath();
+    ctx.globalAlpha = 0.18;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.stroke();
+    const [labelX, labelY] = points[0].map(Number);
+    drawCanvasLabel(ctx, `${index + 1}. ${item.label || "maske"}`, labelX * scaleX, Math.max(18, labelY * scaleY));
+  });
+}
+
+function drawKeypoints(ctx, groups, scaleX, scaleY) {
+  groups.forEach((group, groupIndex) => {
+    const points = group.points || [];
+    points.forEach((point) => {
+      const x = Number(point.x) * scaleX;
+      const y = Number(point.y) * scaleY;
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+      ctx.beginPath();
+      ctx.arc(x, y, 3, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillText(String(point.index ?? ""), x + 4, y - 4);
+    });
+    const first = points.find((point) => Number.isFinite(Number(point.x)) && Number.isFinite(Number(point.y)));
+    if (first) drawCanvasLabel(ctx, `${groupIndex + 1}. ${group.label || "keypoints"}`, Number(first.x) * scaleX, Math.max(18, Number(first.y) * scaleY));
+  });
+}
+
+function drawCanvasLabel(ctx, label, x, labelY) {
+  const labelWidth = ctx.measureText(label).width + 8;
+  ctx.fillRect(x, labelY - 16, labelWidth, 18);
+  ctx.clearRect(x + 1, labelY - 15, labelWidth - 2, 16);
+  ctx.fillText(label, x + 4, labelY - 3);
 }
 
 function formatConfidence(value) {
