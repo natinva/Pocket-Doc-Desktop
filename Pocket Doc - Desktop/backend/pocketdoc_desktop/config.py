@@ -27,7 +27,12 @@ class Settings:
             "/Users/avnitan/PycharmProjects/TestProject/PocketDoc/Modeller",
         )
     )
-    inference_backend: str = os.getenv("POCKETDOC_INFERENCE_BACKEND", "mock")
+    inference_backend: str = os.getenv("POCKETDOC_INFERENCE_BACKEND", "ultralytics")
+    demo_conf_threshold: float = float(os.getenv("POCKETDOC_DEMO_CONF_THRESHOLD", "0.25"))
+    demo_iou_threshold: float = float(os.getenv("POCKETDOC_DEMO_IOU_THRESHOLD", "0.45"))
+    demo_imgsz: int = int(os.getenv("POCKETDOC_DEMO_IMGSZ", "640"))
+    demo_max_det: int = int(os.getenv("POCKETDOC_DEMO_MAX_DET", "300"))
+    demo_enable_postprocess: bool = os.getenv("POCKETDOC_DEMO_ENABLE_POSTPROCESS", "false").lower() in {"1", "true", "yes", "on"}
     upload_dir: Path = _path_from_env("POCKETDOC_UPLOAD_DIR", PROJECT_ROOT / "uploads")
     data_dir: Path = _path_from_env("POCKETDOC_DATA_DIR", PROJECT_ROOT / "data")
     reports_dir: Path = _path_from_env("POCKETDOC_REPORTS_DIR", PROJECT_ROOT / "reports")
