@@ -5,6 +5,7 @@ from typing import Any
 from uuid import uuid4
 
 from .config import settings
+from .inference_adapters import get_adapter
 from .model_registry import find_model
 from .secure_files import secure_files
 from .session_store import utc_now_iso
@@ -22,41 +23,42 @@ class ImagingService:
         if not model:
             raise KeyError(f"Unknown model id: {model_id}")
 
-        image_size = image_path.stat().st_size if image_path.exists() else None
-        if self.backend == "mock":
-            return {
-                "id": str(uuid4()),
-                "modelId": model_id,
-                "modelName": model["name"],
-                "domain": model["domain"],
-                "modality": model.get("modality"),
-                "backend": "mock",
-                "source": source,
-                "imagePath": str(image_path),
-                "imageBytes": image_size,
-                "fileProtected": secure_files.active and image_path.suffix == ".pdoc",
-                "resultSummaryTR": "Görüntü alındı. Gerçek inference backend'i henüz mock modda.",
-                "detections": [],
-                "warningsTR": [
-                    "Bu sonuç demo/mock çıktıdır.",
-                    "Hailo/ONNX/Ultralytics backend bağlandığında gerçek model sonucu burada görünecek.",
-                ],
-                "generatedAt": utc_now_iso(),
-            }
-
         with secure_files.readable_path(image_path, suffix=Path(image_path.name.replace(".pdoc", "")).suffix or ".img") as readable_image:
-            return {
-                "id": str(uuid4()),
-                "modelId": model_id,
-                "modelName": model["name"],
-                "domain": model["domain"],
-                "backend": self.backend,
-                "source": source,
-                "imagePath": str(image_path),
-                "runtimeImagePath": str(readable_image),
-                "fileProtected": secure_files.active and image_path.suffix == ".pdoc",
-                "resultSummaryTR": f"{self.backend} backend seçili; adapter implementasyonu sıradaki milestone.",
-                "detections": [],
-                "warningsTR": ["Inference adapter pending."],
-                "generatedAt": utc_now_iso(),
-            }
+            try:
+                adapter = get_adapter(self.backend)
+                result = adapter.predict(model, readable_image)
+            except Exception as exc:
+                result = self._fallback_result(model, image_path, exc)
+
+        result["source"] = source
+        result["imagePath"] = str(image_path)
+        result["fileProtected"] = secure_files.active and image_path.suffix == ".pdoc"
+        result.setdefault("warningsTR", [])
+        if result["fileProtected"]:
+            result["warningsTR"].append("Yüklenen dosya disk üzerinde korumalı formatta saklandı.")
+        return result
+
+    def _fallback_result(self, model: dict[str, Any], image_path: Path, error: Exception) -> dict[str, Any]:
+        image_size = image_path.stat().st_size if image_path.exists() else None
+        return {
+            "id": str(uuid4()),
+            "modelId": model["id"],
+            "modelName": model["name"],
+            "domain": model.get("domain"),
+            "modality": model.get("modality"),
+            "backend": self.backend,
+            "imagePath": str(image_path),
+            "modelPath": model.get("path"),
+            "modelExists": Path(str(model.get("path", ""))).exists(),
+            "imageBytes": image_size,
+            "fileProtected": secure_files.active and image_path.suffix == ".pdoc",
+            "resultSummaryTR": "Inference adapter çalıştırılamadı; güvenli fallback sonucu üretildi.",
+            "detections": [],
+            "classifications": [],
+            "warningsTR": [
+                "Model çıktısı üretilemedi.",
+                f"Backend: {self.backend}",
+                f"Hata: {type(error).__name__}: {error}",
+            ],
+            "generatedAt": utc_now_iso(),
+        }
