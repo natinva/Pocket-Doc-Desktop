@@ -6,8 +6,12 @@ Pillow>=10.4
 openai>=1.40
 cryptography>=42.0
 
-# Enable later on the Pi or development machine when real imaging/audio is wired.
+# Optional real imaging inference backends.
+# Install on development machine or Raspberry Pi when needed:
+# ultralytics>=8.3
+# onnxruntime>=1.18
+
+# Optional future local audio/camera dependencies.
 # opencv-python
-# ultralytics
 # sounddevice
 # soundfile
