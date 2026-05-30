@@ -22,6 +22,8 @@ class MockAdapter:
             "resultSummaryTR": "Görüntü alındı. Gerçek inference backend'i henüz mock modda.",
             "detections": [],
             "classifications": [],
+            "masks": [],
+            "keypoints": [],
             "warningsTR": [
                 "Bu sonuç demo/mock çıktıdır.",
                 "Gerçek model sonucu için POCKETDOC_INFERENCE_BACKEND=ultralytics veya onnx_runtime seçilmelidir.",
@@ -50,6 +52,8 @@ class UltralyticsAdapter:
         raw_results = yolo.predict(str(image_path), verbose=False, task=task) if task else yolo.predict(str(image_path), verbose=False)
         detections: list[dict[str, Any]] = []
         classifications: list[dict[str, Any]] = []
+        masks: list[dict[str, Any]] = []
+        keypoints: list[dict[str, Any]] = []
 
         for raw in raw_results:
             names = getattr(raw, "names", {}) or {}
@@ -65,18 +69,48 @@ class UltralyticsAdapter:
                         "confidence": confidence,
                         "bboxXYXY": [float(value) for value in xyxy],
                     })
+
+            raw_masks = getattr(raw, "masks", None)
+            if raw_masks is not None and getattr(raw_masks, "xy", None) is not None:
+                for index, polygon in enumerate(raw_masks.xy):
+                    related_detection = detections[index] if index < len(detections) else {}
+                    points = _points_to_xy_list(polygon)
+                    if not points:
+                        continue
+                    masks.append({
+                        "label": related_detection.get("label", f"mask_{index + 1}"),
+                        "classIndex": related_detection.get("classIndex"),
+                        "confidence": related_detection.get("confidence"),
+                        "polygonXY": points,
+                    })
+
+            raw_keypoints = getattr(raw, "keypoints", None)
+            if raw_keypoints is not None and getattr(raw_keypoints, "xy", None) is not None:
+                keypoint_xy = raw_keypoints.xy
+                keypoint_conf = getattr(raw_keypoints, "conf", None)
+                for item_index, item_points in enumerate(keypoint_xy):
+                    points = _points_to_keypoint_list(item_points, keypoint_conf[item_index] if keypoint_conf is not None else None)
+                    if not points:
+                        continue
+                    keypoints.append({
+                        "label": f"keypoints_{item_index + 1}",
+                        "points": points,
+                    })
+
             probs = getattr(raw, "probs", None)
             if probs is not None and getattr(probs, "top5", None) is not None:
                 for cls_idx in probs.top5:
                     confidence = float(probs.data[cls_idx])
                     classifications.append({"label": str(names.get(int(cls_idx), int(cls_idx))), "classIndex": int(cls_idx), "confidence": confidence})
 
-        summary = _summarize_prediction(detections, classifications)
+        summary = _summarize_prediction(detections, classifications, masks, keypoints)
         return _base_result(model, image_path, self.name) | {
             "resultSummaryTR": summary,
             "detections": detections,
             "classifications": classifications,
-            "warningsTR": _clinical_warnings(model, detections, classifications),
+            "masks": masks,
+            "keypoints": keypoints,
+            "warningsTR": _clinical_warnings(model, detections, classifications, masks, keypoints),
         }
 
 
@@ -97,6 +131,8 @@ class OnnxRuntimeAdapter:
             "resultSummaryTR": "ONNX Runtime backend hazır; model özel pre/postprocess adapteri henüz tanımlanmadı.",
             "detections": [],
             "classifications": [],
+            "masks": [],
+            "keypoints": [],
             "warningsTR": [
                 "ONNX model bulundu ancak her model için input preprocessing ve output decoding farklı olabilir.",
                 "Bu adapter, model özel parser eklendikten sonra gerçek sonuç üretecek.",
@@ -136,14 +172,29 @@ def _missing_model_result(model: dict[str, Any], image_path: Path, backend: str)
         "resultSummaryTR": "Model dosyası bulunamadığı için analiz çalıştırılamadı.",
         "detections": [],
         "classifications": [],
+        "masks": [],
+        "keypoints": [],
         "warningsTR": [f"Beklenen model yolu bulunamadı: {model.get('path')}"]
     }
 
 
-def _summarize_prediction(detections: list[dict[str, Any]], classifications: list[dict[str, Any]]) -> str:
+def _summarize_prediction(
+    detections: list[dict[str, Any]],
+    classifications: list[dict[str, Any]],
+    masks: list[dict[str, Any]],
+    keypoints: list[dict[str, Any]],
+) -> str:
+    parts: list[str] = []
     if detections:
         labels = ", ".join(sorted({str(item.get("label")) for item in detections if item.get("label")}))
-        return f"{len(detections)} adet bulgu/nesne işaretlendi: {labels}."
+        parts.append(f"{len(detections)} bbox tespiti: {labels}")
+    if masks:
+        parts.append(f"{len(masks)} segmentasyon maskesi")
+    if keypoints:
+        point_count = sum(len(item.get("points") or []) for item in keypoints)
+        parts.append(f"{len(keypoints)} keypoint grubu / {point_count} nokta")
+    if parts:
+        return "; ".join(parts) + "."
     if classifications:
         best = max(classifications, key=lambda item: item.get("confidence") or 0)
         percent = round(float(best.get("confidence") or 0) * 100, 1)
@@ -151,12 +202,47 @@ def _summarize_prediction(detections: list[dict[str, Any]], classifications: lis
     return "Model çalıştı ancak belirgin tespit/sınıflama çıktısı üretmedi."
 
 
-def _clinical_warnings(model: dict[str, Any], detections: list[dict[str, Any]], classifications: list[dict[str, Any]]) -> list[str]:
+def _clinical_warnings(
+    model: dict[str, Any],
+    detections: list[dict[str, Any]],
+    classifications: list[dict[str, Any]],
+    masks: list[dict[str, Any]],
+    keypoints: list[dict[str, Any]],
+) -> list[str]:
     warnings = ["Bu çıktı klinik karar yerine geçmez; hekim değerlendirmesi gerekir."]
-    if not detections and not classifications:
+    if not detections and not classifications and not masks and not keypoints:
         warnings.append("Negatif/boş model çıktısı hastalık yok anlamına gelmez.")
     if model.get("domain") in {"Dermatology", "Medical Aesthetic"}:
         warnings.append("Dermatolojik görüntülerde ışık, odak ve açı model sonucunu ciddi etkileyebilir.")
     if model.get("modality") and "X-ray" in str(model.get("modality")):
         warnings.append("Radyografik sonuçlar klinik muayene ve orijinal DICOM/röntgen kalitesi ile birlikte yorumlanmalıdır.")
     return warnings
+
+
+def _points_to_xy_list(points: Any) -> list[list[float]]:
+    try:
+        raw_points = points.tolist() if hasattr(points, "tolist") else points
+    except Exception:
+        raw_points = points
+    normalized: list[list[float]] = []
+    for point in raw_points or []:
+        if len(point) < 2:
+            continue
+        x, y = float(point[0]), float(point[1])
+        normalized.append([x, y])
+    return normalized
+
+
+def _points_to_keypoint_list(points: Any, confidence_values: Any | None = None) -> list[dict[str, float]]:
+    xy_points = _points_to_xy_list(points)
+    try:
+        conf_list = confidence_values.tolist() if hasattr(confidence_values, "tolist") else confidence_values
+    except Exception:
+        conf_list = None
+    keypoints: list[dict[str, float]] = []
+    for index, point in enumerate(xy_points):
+        item = {"index": index, "x": point[0], "y": point[1]}
+        if conf_list is not None and index < len(conf_list):
+            item["confidence"] = float(conf_list[index])
+        keypoints.append(item)
+    return keypoints
