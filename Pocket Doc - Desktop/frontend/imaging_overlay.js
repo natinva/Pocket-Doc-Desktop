@@ -24,7 +24,7 @@ function ensureImagingOverlay() {
     panel.id = "imagingOverlayPanel";
     panel.innerHTML = `
       <h2>Görüntü Önizleme ve Tespitler</h2>
-      <p class="muted">BBox, segmentasyon polygon ve keypoint sonuçları seçilen lokal görüntünün üzerine çizilir. Eski oturumlarda ham görüntü tarayıcıda olmadığı için sadece metin sonucu gösterilebilir.</p>
+      <p class="muted">BBox, segmentasyon polygon, keypoint ve postprocess ölçümleri seçilen lokal görüntü üzerinden gösterilir.</p>
       <div class="imaging-preview-wrap">
         <img id="imagingPreviewImage" alt="Görüntü önizleme" />
         <canvas id="imagingOverlayCanvas"></canvas>
@@ -81,6 +81,7 @@ function renderDetectionList(result, hasPreview) {
   const classifications = result.classifications || [];
   const masks = result.masks || [];
   const keypoints = result.keypoints || [];
+  const postprocess = result.postprocessResult || null;
   const warnings = result.warningsTR || [];
   const detectionRows = detections.length
     ? `<h3>BBox Tespitleri</h3><ol>${detections.map((item) => `<li><strong>${escapeHtml(item.label || "bulgu")}</strong> — güven: ${formatConfidence(item.confidence)} — bbox: ${escapeHtml((item.bboxXYXY || []).map((v) => Math.round(Number(v))).join(", "))}</li>`).join("")}</ol>`
@@ -91,13 +92,28 @@ function renderDetectionList(result, hasPreview) {
   const keypointRows = keypoints.length
     ? `<h3>Keypoint Grupları</h3><ol>${keypoints.map((item) => `<li><strong>${escapeHtml(item.label || "keypoint")}</strong> — nokta: ${(item.points || []).length}</li>`).join("")}</ol>`
     : "";
+  const postprocessRows = postprocess
+    ? renderPostprocessResult(postprocess)
+    : "";
   const classificationRows = classifications.length
     ? `<h3>Sınıflama</h3><ol>${classifications.map((item) => `<li><strong>${escapeHtml(item.label || "sınıf")}</strong> — güven: ${formatConfidence(item.confidence)}</li>`).join("")}</ol>`
     : "";
   const warningRows = warnings.length
     ? `<h3>Uyarılar</h3><ul>${warnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join("")}</ul>`
     : "";
-  return `<p><strong>${escapeHtml(result.modelName || "Model")}</strong>: ${escapeHtml(result.resultSummaryTR || "Sonuç yok.")}</p>${detectionRows}${maskRows}${keypointRows}${classificationRows}${warningRows}`;
+  return `<p><strong>${escapeHtml(result.modelName || "Model")}</strong>: ${escapeHtml(result.resultSummaryTR || "Sonuç yok.")}</p>${detectionRows}${maskRows}${keypointRows}${postprocessRows}${classificationRows}${warningRows}`;
+}
+
+function renderPostprocessResult(postprocess) {
+  const measurements = postprocess.measurements || [];
+  const warnings = postprocess.warningsTR || [];
+  const measurementRows = measurements.length
+    ? `<ol>${measurements.map((item) => `<li><strong>${escapeHtml(item.labelTR || item.key)}</strong>: ${escapeHtml(item.value)} ${escapeHtml(item.unit || "")}</li>`).join("")}</ol>`
+    : "<p>Ölçüm üretilemedi.</p>";
+  const warningRows = warnings.length
+    ? `<ul>${warnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join("")}</ul>`
+    : "";
+  return `<h3>Postprocess / Klinik Ölçüm</h3><p><strong>${escapeHtml(postprocess.name || "postprocess")}</strong> — ${escapeHtml(postprocess.status || "-")}</p><p>${escapeHtml(postprocess.summaryTR || "")}</p>${measurementRows}${warningRows}`;
 }
 
 function drawOverlay(result) {
